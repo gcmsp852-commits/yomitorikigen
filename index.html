@@ -1,0 +1,2377 @@
+
+
+
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>QR Twin Reader</title>
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon.png">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="QRツイン">
+    <meta name="theme-color" content="#121212">
+    <style>
+        body { margin: 0; padding: 0; font-family: -apple-system, sans-serif; background-color: #121212; color: #fff; display: flex; flex-direction: column; align-items: center; height: 100dvh; overflow: hidden; }
+        
+        .header { width: 100%; padding: 15px; background-color: #1e1e1e; text-align: center; font-size: 1.2rem; font-weight: bold; box-shadow: 0 2px 10px rgba(0,0,0,0.5); z-index: 10; box-sizing: border-box; }
+        
+        .camera-container { position: relative; width: 100%; flex: 1; background-color: #000; overflow: hidden; display: flex; justify-content: center; align-items: center; }
+        #camera { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; z-index: 1; }
+        #overlayCanvas { position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: contain; pointer-events: none; z-index: 2; }
+        #zxingCanvas { display: none; }
+        
+        #cameraControls { position: absolute; bottom: 30px; left: 0; width: 100%; z-index: 50; display: none; justify-content: center; gap: 15px; pointer-events: none; }
+        #cameraControls .btn { pointer-events: auto; padding: 10px 16px; font-size: 1rem; box-shadow: 0 4px 6px rgba(0,0,0,0.5); }
+
+        
+        .result-panel { width: 100%; padding: 20px 20px calc(20px + env(safe-area-inset-bottom, 20px)) 20px; background-color: #1e1e1e; box-sizing: border-box; text-align: center; z-index: 10; box-shadow: 0 -2px 10px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 10px; }
+        
+        .status { font-size: 0.9rem; color: #ff9800; }
+        
+        .btn { background-color: #2196F3; color: white; border: none; padding: 12px 24px; font-size: 1.1rem; border-radius: 8px; cursor: pointer; display: inline-block; margin-top: 5px; }
+        .btn:active { background-color: #1976D2; }
+        .btn.secondary { background-color: #424242; }
+        .btn.secondary:active { background-color: #212121; }
+        .btn.sys-enc { background-color: #FF6F00; }
+        .btn.sys-enc:active { background-color: #E65100; }
+        .btn.double-enc { background-color: #7B1FA2; }
+        .btn.double-enc:active { background-color: #4A148C; }
+        
+        .mode-btns { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+        .mode-btns .btn { width: 80%; max-width: 300px; }
+        
+        /* 画面オーバーレイ (パスワード・結果画面) */
+        .overlay-screen { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 100; display: none; flex-direction: column; justify-content: center; align-items: center; padding: 20px; box-sizing: border-box; text-align: center; }
+        
+        .overlay-box { background: #1e1e1e; padding: 25px; border-radius: 12px; border: 1px solid #333; width: 90%; max-width: 400px; display: flex; flex-direction: column; gap: 15px; }
+        .overlay-box h2 { margin: 0; color: #4CAF50; font-size: 1.3rem; }
+        .overlay-box p { margin: 0; font-size: 1rem; color: #ccc; word-break: break-all; }
+        .overlay-box input { padding: 12px; font-size: 1.1rem; border-radius: 6px; border: 1px solid #444; background: #000; color: #fff; text-align: center; }
+        input:focus { outline: none; border-color: #2196F3; }
+        
+        .qr-data-card { background: #000; border: 1px solid #333; border-radius: 6px; padding: 10px; text-align: left; }
+        .qr-data-card label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 4px; }
+        .qr-data-card .text { font-size: 1.1rem; color: #fff; word-break: break-all; font-family: monospace; }
+        .qr-data-card .mgmt { font-size: 0.8rem; color: #4CAF50; font-family: monospace; margin-top: 4px; }
+        
+        .enc-badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-size: 0.85rem; font-weight: bold; margin-bottom: 8px; }
+        .enc-badge.sys { background: rgba(255,111,0,0.2); color: #FF6F00; border: 1px solid rgba(255,111,0,0.4); }
+        .enc-badge.app { background: rgba(123,31,162,0.2); color: #CE93D8; border: 1px solid rgba(123,31,162,0.4); }
+    </style>
+</head>
+<body>
+
+    <div class="header" id="headerText">QR Twin Reader</div>
+    
+    <div class="camera-container">
+        <video id="camera" playsinline autoplay muted></video>
+        <canvas id="overlayCanvas"></canvas>
+        <div id="cameraControls">
+            <button class="btn secondary" onclick="goBack()">🔄 モード切替</button>
+            <button class="btn" onclick="restartScan()">📷 もう一度スキャン</button>
+        </div>
+    </div>
+    <canvas id="zxingCanvas"></canvas>
+
+    <div class="result-panel">
+        <div class="status" id="statusText">モードを選択してください</div>
+        <div id="btnContainer">
+            <div class="mode-btns">
+                <button class="btn" id="normalModeBtn">通常モード</button>
+                <button class="btn sys-enc" id="digitalSignModeBtn">電子署名モード</button>
+                <button class="btn double-enc" id="doubleEncModeBtn">二重暗号化モード</button>
+                <button class="btn" id="colorEncModeBtn" style="background-color:#00897B;">カラー符号化モード</button>
+                <button class="btn secondary" id="logoutBtn" style="margin-top:10px; font-size:0.9rem;">ログアウト</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 読取者IDログイン画面 -->
+    <div class="overlay-screen" id="loginScreen">
+        <div class="overlay-box">
+            <h2 style="color:#2196F3;">読取者ID ログイン</h2>
+            <p>読取者IDを入力してください</p>
+            <input type="text" id="loginReaderIdInput" placeholder="英数字・記号（ASCII文字）" style="font-size:1rem;" />
+            <label style="display:flex; align-items:center; gap:8px; font-size:0.9rem; color:#ccc; cursor:pointer;">
+                <input type="checkbox" id="rememberReaderId" style="width:auto; accent-color:#2196F3;">
+                読取者IDを記憶する
+            </label>
+            <button class="btn" onclick="doLogin()">ログイン</button>
+        </div>
+    </div>
+
+    <!-- パスワード入力画面（アプリ暗号化用） -->
+    <div class="overlay-screen" id="passwordScreen">
+        <div class="overlay-box">
+            <h2>QRコードは暗号化されています</h2>
+            <div class="qr-data-card">
+                <label>第1QRのデータ</label>
+                <div class="text" id="qr1PreviewText">-</div>
+            </div>
+            <p>パスワードを入力してスキャン再開</p>
+            <input type="password" id="appPasswordInput" placeholder="Password" />
+            <button class="btn" onclick="submitPassword()">スキャン再開</button>
+            <button class="btn secondary" onclick="cancelPassword()">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- システム暗号化通知画面 -->
+    <div class="overlay-screen" id="sysEncScreen">
+        <div class="overlay-box">
+            <span class="enc-badge sys">🔒 システム暗号化</span>
+            <h2 id="sysEncTitle">QRコードがシステム暗号化されています</h2>
+            <div class="qr-data-card">
+                <label>第1QRのデータ</label>
+                <div class="text" id="sysEncQr1Text">-</div>
+            </div>
+            <p id="sysEncMsg">スキャン再開で第2QRを復号します</p>
+            <button class="btn sys-enc" id="sysEncResumeBtn" onclick="resumeAfterSysEnc()">スキャン再開</button>
+            <button class="btn secondary" onclick="cancelSysEnc()">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- 二重暗号化: 第1QR読取り後画面 -->
+    <div class="overlay-screen" id="doubleEncScreen">
+        <div class="overlay-box">
+            <span class="enc-badge app">🔐 アプリ暗号化</span>
+            <h2>QRコードがアプリ暗号化されています。パスワードAは以下です。</h2>
+            <div class="qr-data-card">
+                <label>パスワードA</label>
+                <div class="text" id="doubleEncQr1Text">-</div>
+            </div>
+            <p>パスワードAを入力</p>
+            <input type="password" id="doubleEncPasswordInput" placeholder="Password" />
+            <button class="btn double-enc" onclick="resumeAfterDoubleEnc()">スキャン再開</button>
+            <button class="btn secondary" onclick="cancelDoubleEnc()">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- 最終結果画面 -->
+    <div class="overlay-screen" id="resultScreen">
+        <div class="overlay-box" style="gap: 20px;">
+            <h2 id="resultTitle">ファイルのパスワードFは以下です</h2>
+            <!-- 通常モード表示 -->
+            <div id="normalResultSection">
+                <div class="qr-data-card" style="border-color: #00E676;">
+                    <label id="normalResultLabel1" style="color:#00E676;">第1QR</label>
+                    <div class="text" id="resText1">-</div>
+                </div>
+                <div class="qr-data-card" style="border-color: #29B6F6; margin-top:12px;">
+                    <label id="normalResultLabel2" style="color:#29B6F6;">第2QR</label>
+                    <div class="text" id="resText2">-</div>
+                </div>
+            </div>
+            <!-- 電子署名モード表示 -->
+            <div id="digitalSignResultSection" style="display:none;">
+                <div class="qr-data-card" style="border-color: #90CAF9;">
+                    <label style="color:#90CAF9;">読取内容</label>
+                    <div class="text" id="dsResContent">-</div>
+                </div>
+                <div id="dsVerifyCard" class="qr-data-card" style="margin-top:12px;">
+                    <div id="dsVerifyText" style="font-size:1.2rem; font-weight:bold; text-align:center; padding:10px 0;"></div>
+                </div>
+                <div class="qr-data-card" style="border-color: #FFD54F; margin-top:12px;">
+                    <label style="color:#FFD54F;">認証鍵</label>
+                    <div class="text" id="dsAuthKey">-</div>
+                </div>
+                <div id="dsImageContainer" style="margin-top:12px; text-align:center; display:none;">
+                    <img id="dsImage" style="max-width:100%; max-height:240px; border-radius:8px; border:2px solid #555;" />
+                </div>
+            </div>
+            <button class="btn" onclick="restartScan()">もう一度スキャン</button>
+        </div>
+    </div>
+
+    <!-- カラー符号化: 色設定画面 -->
+    <div class="overlay-screen" id="colorSettingsScreen">
+        <div class="overlay-box" style="gap: 15px;">
+            <h2 style="color:#00897B;">カラー符号化モード設定</h2>
+            <p>生成時と同じ色設定を選択してください</p>
+            <div class="qr-data-card">
+                <label>暗色（Twin1=黒, Twin2=白）</label>
+                <select id="readerDarkColor" style="padding:10px; font-size:1rem; border-radius:6px; border:1px solid #444; background:#000; color:#fff; width:100%; margin-top:6px;">
+                    <option value="black">黒</option>
+                    <option value="red" selected>赤</option>
+                    <option value="cyan">水色</option>
+                </select>
+            </div>
+            <div class="qr-data-card">
+                <label>明色（Twin1=白, Twin2=黒）</label>
+                <select id="readerLightColor" style="padding:10px; font-size:1rem; border-radius:6px; border:1px solid #444; background:#000; color:#fff; width:100%; margin-top:6px;">
+                    <option value="white">白</option>
+                    <option value="yellow" selected>黄色</option>
+                    <option value="pink">桃色</option>
+                </select>
+            </div>
+            <button class="btn" style="background-color:#00897B;" onclick="startColorEncScan()">スキャン開始</button>
+            <button class="btn secondary" onclick="cancelColorSettings()">キャンセル</button>
+        </div>
+    </div>
+
+    <!-- カラー符号化: 結果画面 -->
+    <div class="overlay-screen" id="colorResultScreen">
+        <div class="overlay-box" style="gap: 12px; max-height: 90vh; overflow-y: auto;">
+            <h2 style="color:#00897B;">カラー符号化 読取り結果</h2>
+            <div class="qr-data-card" style="border-color: #00E676;">
+                <label style="color:#00E676;">第1QR データ</label>
+                <div class="text" id="colorRes1">-</div>
+            </div>
+            <div class="qr-data-card" style="border-color: #29B6F6;">
+                <label style="color:#29B6F6;">第2QR データ</label>
+                <div class="text" id="colorRes2">-</div>
+            </div>
+            <div class="qr-data-card" style="border-color: #FF9800;">
+                <label style="color:#FF9800;">第3QR データ</label>
+                <div class="text" id="colorRes3">-</div>
+            </div>
+            <div class="qr-data-card" style="border-color: #CE93D8;">
+                <label style="color:#CE93D8;">第4QR データ</label>
+                <div class="text" id="colorRes4">-</div>
+            </div>
+            <button class="btn" style="background-color:#00897B;" onclick="restartScan()">もう一度スキャン</button>
+            <button class="btn secondary" onclick="goBack()">モード切替</button>
+        </div>
+    </div>
+
+    <script src="jsQR.js"></script>
+
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('./sw.js').then(function(registration) {
+                    console.log('ServiceWorker registration successful');
+                }, function(err) {
+                    console.log('ServiceWorker registration failed: ', err);
+                });
+            });
+        }
+    </script>
+
+    <script>
+        const video = document.getElementById('camera');
+        const overlayCanvas = document.getElementById('overlayCanvas');
+        const ctx = overlayCanvas.getContext('2d', { willReadFrequently: true });
+        
+        const zxingCanvas = document.getElementById('zxingCanvas');
+        const zxingCtx = zxingCanvas.getContext('2d', { willReadFrequently: true });
+
+        const statusText = document.getElementById('statusText');
+
+        let isScanning = false;
+        // scanStage: 0=Idle, 1=Scan QR1, 2=Password/SysEnc wait, 3=Scan QR2
+        let scanStage = 0;
+        let firstQR = null;
+        let secondQR = null;
+        let appMask = null;
+        let colorScanResult = null;
+        let colorScanBBox = null;
+        let colorScanAttemptCount = 0;
+        let lastDetectTime = 0;
+        let isProcessing = false;
+        let sysEncStage3 = false; // 通常モードでシステム暗号化の第2QR探索中フラグ
+        let digitalSignStage3 = false; // 電子署名モードの第2QR（もしくはペア）探索中フラグ
+        let lastTwinBBox = null; // ★ Stage 1で検出したツインQRの領域を保存
+
+        // ★ 読取者IDログインシステム
+        let currentReaderIdHash = null; // ログイン中の読取者IDハッシュ(32bit)
+
+        // FNV-1a 32bit hash（Generator と同一アルゴリズム）
+        function hashReaderId32(readerId) {
+            let hash = 0x811c9dc5;
+            for (let i = 0; i < readerId.length; i++) {
+                hash ^= readerId.charCodeAt(i);
+                hash = Math.imul(hash, 0x01000193);
+                hash = hash >>> 0;
+            }
+            return hash;
+        }
+
+        // 読取期限チェック: 32bitから年月日時分秒を取り出し、現在時刻と比較
+        function checkExpiry(expiryExt32) {
+            const year   = ((expiryExt32 >>> 28) & 0xF) + 2026;
+            const month  = (expiryExt32 >>> 24) & 0xF;
+            const day    = (expiryExt32 >>> 19) & 0x1F;
+            const hour   = (expiryExt32 >>> 14) & 0x1F;
+            const minute = (expiryExt32 >>> 8) & 0x3F;
+            const second = (expiryExt32 >>> 2) & 0x3F;
+            // month=0は未定義扱い→期限なしとして扱う
+            if (month === 0) return true;
+            const expiryDate = new Date(year, month - 1, day || 1, hour, minute, second);
+            return new Date() <= expiryDate;
+        }
+
+        // ログイン処理
+        function doLogin() {
+            const rid = document.getElementById('loginReaderIdInput').value.trim();
+            if (!rid) { alert('読取者IDを入力してください'); return; }
+            if (!/^[\x20-\x7E]+$/.test(rid)) { alert('ASCII文字のみ入力できます'); return; }
+            currentReaderIdHash = hashReaderId32(rid);
+            const remember = document.getElementById('rememberReaderId').checked;
+            if (remember) {
+                localStorage.setItem('qrtwin_reader_id', rid);
+                localStorage.setItem('qrtwin_reader_remember', '1');
+            } else {
+                localStorage.removeItem('qrtwin_reader_id');
+                localStorage.removeItem('qrtwin_reader_remember');
+            }
+            document.getElementById('loginScreen').style.display = 'none';
+        }
+
+        // ログアウト処理
+        function doLogout() {
+            currentReaderIdHash = null;
+            localStorage.removeItem('qrtwin_reader_id');
+            localStorage.removeItem('qrtwin_reader_remember');
+            document.getElementById('loginReaderIdInput').value = '';
+            document.getElementById('rememberReaderId').checked = false;
+            document.getElementById('loginScreen').style.display = 'flex';
+        }
+
+        // 起動時: 記憶された読取者IDがあれば自動ログイン
+        (function initLogin() {
+            const saved = localStorage.getItem('qrtwin_reader_id');
+            const remember = localStorage.getItem('qrtwin_reader_remember');
+            if (saved && remember === '1') {
+                currentReaderIdHash = hashReaderId32(saved);
+                // ログイン画面をスキップ
+            } else {
+                // ログイン画面を表示
+                document.getElementById('loginScreen').style.display = 'flex';
+            }
+        })();
+
+        const SCAN_INTERVAL_MS = 40;
+        const COLOR_FAST_MAX_DIM = 400;
+        const COLOR_FULL_MAX_DIM = 560;
+        const COLOR_FOCUS_MAX_DIM = 720;
+        const COLOR_REFINE_MAX_DIM = 960;
+        const COLOR_FULL_SCAN_EVERY = 8;
+        const COLOR_FOCUS_REFRESH_EVERY = 15;
+        const COLOR_DETECT_REFRESH_EVERY = 2;
+        const COLOR_BBOX_PADDING = 64;
+
+        // モード: 'normal' or 'double'
+        let scanMode = 'normal';
+
+        let barcodeDetector = null;
+        if ('BarcodeDetector' in window) {
+            try {
+                barcodeDetector = new BarcodeDetector({ formats: ['qr_code'] });
+            } catch (e) { console.warn("BarcodeDetector error", e); }
+        }
+
+        // --- SHA-256 Implementation (Same as Generator) ---
+        function sha256Bytes(msgBytes) {
+          const K = new Uint32Array([
+            0x428a2f98,0x71374491,0xb5c0fbcf,0xe9b5dba5,0x3956c25b,0x59f111f1,0x923f82a4,0xab1c5ed5,
+            0xd807aa98,0x12835b01,0x243185be,0x550c7dc3,0x72be5d74,0x80deb1fe,0x9bdc06a7,0xc19bf174,
+            0xe49b69c1,0xefbe4786,0x0fc19dc6,0x240ca1cc,0x2de92c6f,0x4a7484aa,0x5cb0a9dc,0x76f988da,
+            0x983e5152,0xa831c66d,0xb00327c8,0xbf597fc7,0xc6e00bf3,0xd5a79147,0x06ca6351,0x14292967,
+            0x27b70a85,0x2e1b2138,0x4d2c6dfc,0x53380d13,0x650a7354,0x766a0abb,0x81c2c92e,0x92722c85,
+            0xa2bfe8a1,0xa81a664b,0xc24b8b70,0xc76c51a3,0xd192e819,0xd6990624,0xf40e3585,0x106aa070,
+            0x19a4c116,0x1e376c08,0x2748774c,0x34b0bcb5,0x391c0cb3,0x4ed8aa4a,0x5b9cca4f,0x682e6ff3,
+            0x748f82ee,0x78a5636f,0x84c87814,0x8cc70208,0x90befffa,0xa4506ceb,0xbef9a3f7,0xc67178f2
+          ]);
+          function rotr(x,n){ return (x>>>n) | (x<<(32-n)); }
+          function ch(x,y,z){ return (x & y) ^ (~x & z); }
+          function maj(x,y,z){ return (x & y) ^ (x & z) ^ (y & z); }
+          function s0(x){ return rotr(x,7) ^ rotr(x,18) ^ (x>>>3); }
+          function s1(x){ return rotr(x,17) ^ rotr(x,19) ^ (x>>>10); }
+          function S0(x){ return rotr(x,2) ^ rotr(x,13) ^ rotr(x,22); }
+          function S1(x){ return rotr(x,6) ^ rotr(x,11) ^ rotr(x,25); }
+
+          const ml = msgBytes.length;
+          const bitLenHi = Math.floor((ml * 8) / 0x100000000);
+          const bitLenLo = (ml * 8) >>> 0;
+          const withOne = ml + 1;
+          let padLen = (withOne % 64 <= 56) ? (56 - (withOne % 64)) : (56 + 64 - (withOne % 64));
+          const totalLen = withOne + padLen + 8;
+          const m = new Uint8Array(totalLen);
+          m.set(msgBytes, 0); m[ml] = 0x80;
+          const dv = new DataView(m.buffer);
+          dv.setUint32(totalLen - 8, bitLenHi, false);
+          dv.setUint32(totalLen - 4, bitLenLo, false);
+
+          let a=0x6a09e667,b=0xbb67ae85,c=0x3c6ef372,d=0xa54ff53a,e=0x510e527f,f=0x9b05688c,g=0x1f83d9ab,h=0x5be0cd19;
+          const W = new Uint32Array(64);
+          for (let off = 0; off < totalLen; off += 64) {
+            for (let i = 0; i < 16; i++) W[i] = dv.getUint32(off + i * 4, false);
+            for (let i = 16; i < 64; i++) W[i] = (s1(W[i-2]) + W[i-7] + s0(W[i-15]) + W[i-16]) >>> 0;
+            let A=a,B=b,C=c,D=d,E=e,F=f,G=g,H=h;
+            for (let i = 0; i < 64; i++) {
+              const t1 = (H + S1(E) + ch(E, F, G) + K[i] + W[i]) >>> 0;
+              const t2 = (S0(A) + maj(A, B, C)) >>> 0;
+              H=G; G=F; F=E; E=(D + t1) >>> 0; D=C; C=B; B=A; A=(t1 + t2) >>> 0;
+            }
+            a=(a+A)>>>0; b=(b+B)>>>0; c=(c+C)>>>0; d=(d+D)>>>0; e=(e+E)>>>0; f=(f+F)>>>0; g=(g+G)>>>0; h=(h+H)>>>0;
+          }
+          const out = new Uint8Array(32);
+          const odv = new DataView(out.buffer);
+          odv.setUint32(0, a, false); odv.setUint32(4, b, false); odv.setUint32(8, c, false); odv.setUint32(12, d, false);
+          odv.setUint32(16, e, false); odv.setUint32(20, f, false); odv.setUint32(24, g, false); odv.setUint32(28, h, false);
+          return out;
+        }
+
+        function bytesToBigInt(bytes) {
+          let hex = "";
+          for (let i = 0; i < bytes.length; i++) hex += bytes[i].toString(16).padStart(2, "0");
+          return BigInt("0x" + (hex || "0"));
+        }
+
+        function bytesToHex(bytes) {
+          return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+        }
+
+        async function sha256BytesAsync(msgBytes) {
+            // 環境によって crypto.subtle が無い場合があるため、常に自前実装を使用
+            return sha256Bytes(msgBytes);
+        }
+
+        async function deriveEncryptionMaskBytesAsync(password, neededBytes) {
+            if (!password) return null;
+            const pwBytes = new TextEncoder().encode(password);
+            let h0 = await sha256BytesAsync(pwBytes);
+            let result = new Uint8Array(neededBytes);
+            let offset = 0;
+            let currentHash = h0;
+            
+            while (offset < neededBytes) {
+                const copyLen = Math.min(currentHash.length, neededBytes - offset);
+                result.set(currentHash.subarray(0, copyLen), offset);
+                offset += copyLen;
+                if (offset < neededBytes) {
+                    currentHash = await sha256BytesAsync(currentHash);
+                }
+            }
+            return result;
+        }
+
+        // ===== ECDSA secp160r1 検証用実装 =====
+        const SECP160R1 = {
+            p: 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF7FFFFFFFn,
+            a: 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF7FFFFFFFn - 3n,
+            b: 0x1C97BEFC54BD7A8B65ACF89F81D4D4ADC565FA45n,
+            Gx: 0x4A96B5688EF573284664698968C38BB913CBFC82n,
+            Gy: 0x23A628553168947D59DCC912042351377AC5FB32n,
+            n: 0x0100000000000000000001F4C8F927AED3CA752257n
+        };
+        
+        function bigMod(a, m) { return ((a % m) + m) % m; }
+        
+        function modInverse(a, m) {
+            a = bigMod(a, m);
+            let [old_r, r] = [a, m];
+            let [old_s, s] = [1n, 0n];
+            while (r !== 0n) {
+                const quotient = old_r / r;
+                [old_r, r] = [r, old_r - quotient * r];
+                [old_s, s] = [s, old_s - quotient * s];
+            }
+            return bigMod(old_s, m);
+        }
+        
+        function pointAdd(P, Q) {
+            if (!P) return Q;
+            if (!Q) return P;
+            const { p, a } = SECP160R1;
+            if (P.x === Q.x && P.y !== Q.y) return null;
+            let m;
+            if (P.x === Q.x && P.y === Q.y) {
+                if (P.y === 0n) return null;
+                m = bigMod((3n * P.x * P.x + a) * modInverse(2n * P.y, p), p);
+            } else {
+                m = bigMod((Q.y - P.y) * modInverse(Q.x - P.x, p), p);
+            }
+            const x = bigMod(m * m - P.x - Q.x, p);
+            const y = bigMod(m * (P.x - x) - P.y, p);
+            return { x, y };
+        }
+        
+        function pointMultiply(k, P) {
+            let R = null;
+            let Q = { x: P.x, y: P.y };
+            let tempK = k;
+            while (tempK > 0n) {
+                if (tempK & 1n) R = pointAdd(R, Q);
+                Q = pointAdd(Q, Q);
+                tempK >>= 1n;
+            }
+            return R;
+        }
+
+        function ecdsaVerify(hashBytes, sigR, sigS, pubKeyHex) {
+            const { p, n, Gx, Gy } = SECP160R1;
+            const hashValue = sha256Bytes(hashBytes);
+            const e = bytesToBigInt(hashValue);
+            const z = e >> BigInt(Math.max(0, hashValue.length * 8 - 160));
+            
+            const r = bytesToBigInt(sigR);
+            const s = bytesToBigInt(sigS);
+            
+            if (r <= 0n || r >= n || s <= 0n || s >= n) return false;
+            
+            const w = modInverse(s, n);
+            const u1 = bigMod(z * w, n);
+            const u2 = bigMod(r * w, n);
+            
+            const G = { x: Gx, y: Gy };
+            const Qx = BigInt("0x" + pubKeyHex.substring(2, 42));
+            const Qy = BigInt("0x" + pubKeyHex.substring(42, 82));
+            const Q = { x: Qx, y: Qy };
+            
+            const u1G = pointMultiply(u1, G);
+            const u2Q = pointMultiply(u2, Q);
+            const R = pointAdd(u1G, u2Q);
+            
+            if (!R) return false;
+            return bigMod(R.x, n) === r;
+        }
+
+        const ECDSA_PUBLIC_KEYS = {
+            1: "046a4e7d6aca3f3903eb33c7d890eb06ab40943e314ac73a562414b347c1a286b791b057feeccb3038",
+            2: "043a9d0e35df4c6602971073a703c45ae87ba8074e1d49f24fc36f0fc27aa9f6009b6afe39f0b5cc9b",
+            3: "0491516f25a3044bc2d6fbbb28437b5645f3fdfd24916e2b658a1b7a54acaf7c1fccd7f9cb364a4a51",
+            4: "0406a98cb2e453c5e60993ef83c70b7526340765108302dc2d8e97c8e10140021b19c81edd6e6f782c",
+            5: "0470bf87f7189b4d06ea5fd556431622a081cc7338921d086fbb77d7313492dd5795957f85424456e2",
+            6: "0422d3020fd4bdb0935fab8a28a2b9c90a36c05768a7e7d60d17f0783ac2d92992cc311141cc9d07bd",
+            7: "044f15effd43786d7d3751afd7799084a67dcd0e1adb0c19c8e5eef2fd1b85bf911a4edb2f385ffaa9",
+            8: "0462c63a8e85ede6fc8a927bbe94ec16fdfa46e22dc1d3b5ccf74d507b38be8c71a84f038f8e0a66b4",
+            9: "046563d6db3eae744da941ff7084b376fb2852f00197de9d1dee81e66c2ad659187cd1a36ef5719901",
+            10: "04fe13aaeb907d22d0f2dbb9d873fca32835f651974ea86d7f36117c8c0506324f9b0c975e41528096"
+        };
+
+        const ECDSA_SENDER_NAMES = {
+            1: 'テララコード研究所', 2: 'タケトモデータ', 3: 'セコムセキュリティ',
+            4: '名古屋弁護士会', 5: '愛知司法書士会', 6: '情報経済省（日本',
+            7: '西京県公安委員会', 8: '南海県東陸市', 9: 'テララ教育福祉財団', 10: '早慶大学'
+        };
+
+        // --- 描画関数 ---
+        const drawLine = (begin, end, color) => {
+            ctx.beginPath();
+            ctx.moveTo(begin.x, begin.y);
+            ctx.lineTo(end.x, end.y);
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = color;
+            ctx.stroke();
+        };
+
+        const drawBoundingBox = (points, color) => {
+            if (!points || points.length !== 4) return;
+            drawLine(points[0], points[1], color);
+            drawLine(points[1], points[2], color);
+            drawLine(points[2], points[3], color);
+            drawLine(points[3], points[0], color);
+        };
+
+        // --- カメラ制御 ---
+        async function startCamera() {
+            try {
+                statusText.innerText = "カメラをリクエスト中...";
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } }
+                });
+                
+                video.srcObject = stream;
+                video.setAttribute("playsinline", true);
+                
+                await new Promise((resolve) => {
+                    video.onloadeddata = () => resolve();
+                    setTimeout(resolve, 2000);
+                });
+                
+                try {
+                    await video.play();
+                } catch(e) {
+                    statusText.innerText = "画面をタップして再生を許可してください";
+                    return;
+                }
+
+                document.getElementById('btnContainer').style.display = 'none';
+                document.getElementById('cameraControls').style.display = 'flex';
+                scanStage = 1;
+                isScanning = true;
+
+                if (scanMode === 'normal') {
+                    statusText.innerText = "第1QRを探索中... (Hybrid)";
+                } else {
+                    statusText.innerText = "第1QR（システム暗号化）を探索中...";
+                }
+                requestAnimationFrame(scanLoop);
+                
+            } catch (err) {
+                statusText.innerText = "エラー: " + err.message;
+            }
+        }
+
+        // ログアウトボタン
+        document.getElementById('logoutBtn').addEventListener('click', () => {
+            doLogout();
+        });
+
+        // モード選択ボタン
+        document.getElementById('normalModeBtn').addEventListener('click', () => {
+            scanMode = 'normal';
+            document.getElementById('headerText').innerText = 'QR Twin Reader (通常モード)';
+            startCamera();
+        });
+
+        document.getElementById('doubleEncModeBtn').addEventListener('click', () => {
+            scanMode = 'double';
+            document.getElementById('headerText').innerText = 'QR Twin Reader (二重暗号化モード)';
+            startCamera();
+        });
+
+        document.getElementById('digitalSignModeBtn').addEventListener('click', () => {
+            scanMode = 'digital_sign';
+            document.getElementById('headerText').innerText = 'QR Twin Reader (電子署名対応)';
+            startScanByDigitalSign();
+        });
+
+        function startScanByDigitalSign() {
+            scanStage = 1;
+            digitalSignStage3 = false;
+            statusText.innerText = "電子署名モード: 第1QRを探索中...";
+            startCamera();
+        }
+
+        // --- UI アクション ---
+        function showPasswordScreen() {
+            if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
+            
+            isScanning = false;
+            scanStage = 2;
+            document.getElementById('qr1PreviewText').innerText = firstQR.text;
+            document.getElementById('appPasswordInput').value = "";
+            document.getElementById('passwordScreen').style.display = 'flex';
+        }
+
+        function showSysEncScreen() {
+            if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
+            
+            isScanning = false;
+            scanStage = 2;
+            document.getElementById('sysEncQr1Text').innerText = firstQR.text;
+            document.getElementById('sysEncScreen').style.display = 'flex';
+        }
+
+        function showDoubleEncScreen() {
+            if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
+            
+            isScanning = false;
+            scanStage = 2;
+            document.getElementById('doubleEncQr1Text').innerText = firstQR.text;
+            document.getElementById('doubleEncPasswordInput').value = "";
+            document.getElementById('doubleEncScreen').style.display = 'flex';
+        }
+
+        function cancelPassword() {
+            document.getElementById('passwordScreen').style.display = 'none';
+            goBack();
+        }
+
+        function cancelSysEnc() {
+            document.getElementById('sysEncScreen').style.display = 'none';
+            goBack();
+        }
+
+        function cancelDoubleEnc() {
+            document.getElementById('doubleEncScreen').style.display = 'none';
+            goBack();
+        }
+
+        async function submitPassword() {
+            const pw = document.getElementById('appPasswordInput').value;
+            if (!pw) {
+                alert("パスワードを入力してください");
+                return;
+            }
+            
+            document.getElementById('passwordScreen').style.display = 'none';
+            statusText.innerText = "マスク生成中...";
+            
+            appMask = await deriveEncryptionMaskBytesAsync(pw, 5000);
+            
+            scanStage = 3;
+            if (firstQR) firstQR.points = null;
+            
+            statusText.innerText = "第2QRを探索中... (jsQR XOR)";
+            isScanning = true;
+            lastDetectTime = Date.now();
+            requestAnimationFrame(scanLoop);
+        }
+
+        function resumeAfterSysEnc() {
+            document.getElementById('sysEncScreen').style.display = 'none';
+            
+            scanStage = 3;
+            sysEncStage3 = true; // システム暗号化復号モードをON
+            if (firstQR) firstQR.points = null;
+            
+            statusText.innerText = "第2QR（システム暗号化）を探索中...";
+            isScanning = true;
+            lastDetectTime = Date.now();
+            requestAnimationFrame(scanLoop);
+        }
+
+        async function resumeAfterDoubleEnc() {
+            const pw = document.getElementById('doubleEncPasswordInput').value;
+            if (!pw) {
+                alert("パスワードを入力してください");
+                return;
+            }
+
+            document.getElementById('doubleEncScreen').style.display = 'none';
+            statusText.innerText = "マスク生成中...";
+            
+            // 入力されたパスワードを使用して第2QRのマスク生成
+            appMask = await deriveEncryptionMaskBytesAsync(pw, 5000);
+            
+            scanStage = 3;
+            if (firstQR) firstQR.points = null;
+            
+            statusText.innerText = "第2QR（アプリ暗号化）を探索中...";
+            isScanning = true;
+            lastDetectTime = Date.now();
+            requestAnimationFrame(scanLoop);
+        }
+
+        function showResultScreen(digitalSignResult = null) {
+            if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
+
+            isScanning = false;
+
+            const normalSection = document.getElementById('normalResultSection');
+            const dsSection = document.getElementById('digitalSignResultSection');
+            const resultTitle = document.getElementById('resultTitle');
+
+            if (digitalSignResult) {
+                // 電子署名モード結果表示
+                normalSection.style.display = 'none';
+                dsSection.style.display = '';
+                resultTitle.innerText = '電子署名 認証結果';
+
+                // 読取内容
+                document.getElementById('dsResContent').innerText = firstQR ? firstQR.text : '-';
+
+                // 認証結果
+                const verifyCard = document.getElementById('dsVerifyCard');
+                const verifyText = document.getElementById('dsVerifyText');
+                if (digitalSignResult.verified) {
+                    verifyCard.style.borderColor = '#4CAF50';
+                    verifyText.style.color = '#4CAF50';
+                    verifyText.innerText = '認証できました';
+                } else {
+                    verifyCard.style.borderColor = '#F44336';
+                    verifyText.style.color = '#F44336';
+                    verifyText.innerText = '認証に失敗しました';
+                }
+
+                // 認証鍵（組織名）
+                document.getElementById('dsAuthKey').innerText = digitalSignResult.senderName || '-';
+
+                // 画像データID → 画像表示
+                const imgContainer = document.getElementById('dsImageContainer');
+                const imgEl = document.getElementById('dsImage');
+                const imgId = digitalSignResult.imageDataId;
+                if (imgId && imgId >= 1 && imgId <= 10) {
+                    imgEl.src = 'ID' + imgId + '.png';
+                    imgEl.alt = '画像データ ID' + imgId;
+                    imgEl.onerror = function() { imgContainer.style.display = 'none'; };
+                    imgContainer.style.display = '';
+                } else {
+                    imgContainer.style.display = 'none';
+                }
+            } else {
+                // 通常モード / 二重暗号化モード結果表示
+                normalSection.style.display = '';
+                dsSection.style.display = 'none';
+
+                const label1El = document.getElementById('normalResultLabel1');
+                const label2El = document.getElementById('normalResultLabel2');
+
+                if (scanMode === 'double') {
+                    // 二重暗号化モード
+                    resultTitle.innerText = 'ファイルのパスワードFは以下です';
+                    if (label1El) label1El.innerText = 'パスワードA';
+                    if (label2El) label2El.innerText = 'パスワードF';
+                } else {
+                    // 通常モード / その他
+                    resultTitle.innerText = '読取結果';
+                    if (label1El) label1El.innerText = '第1QR';
+                    if (label2El) label2El.innerText = '第2QR';
+                }
+
+                document.getElementById('resText1').innerText = firstQR ? firstQR.text : '-';
+                document.getElementById('resText2').innerText = secondQR ? secondQR.text : '-';
+            }
+
+            document.getElementById('resultScreen').style.display = 'flex';
+        }
+
+        function goBack() {
+            document.getElementById('resultScreen').style.display = 'none';
+            document.getElementById('passwordScreen').style.display = 'none';
+            document.getElementById('sysEncScreen').style.display = 'none';
+            document.getElementById('doubleEncScreen').style.display = 'none';
+            document.getElementById('colorSettingsScreen').style.display = 'none';
+            document.getElementById('colorResultScreen').style.display = 'none';
+            firstQR = null;
+            secondQR = null;
+            appMask = null;
+            resetColorScanResult();
+            sysEncStage3 = false;
+            digitalSignStage3 = false;
+            lastTwinBBox = null;
+            
+            // モード選択画面に戻す
+            scanStage = 0;
+            isScanning = false;
+            document.getElementById('cameraControls').style.display = 'none';
+            document.getElementById('btnContainer').style.display = '';
+            statusText.innerText = "モードを選択してください";
+            document.getElementById('headerText').innerText = 'QR Twin Reader';
+        }
+
+        function restartScan() {
+            document.getElementById('resultScreen').style.display = 'none';
+            document.getElementById('passwordScreen').style.display = 'none';
+            document.getElementById('sysEncScreen').style.display = 'none';
+            document.getElementById('doubleEncScreen').style.display = 'none';
+            document.getElementById('colorSettingsScreen').style.display = 'none';
+            document.getElementById('colorResultScreen').style.display = 'none';
+            firstQR = null;
+            secondQR = null;
+            appMask = null;
+            resetColorScanResult();
+            sysEncStage3 = false;
+            digitalSignStage3 = false;
+            lastTwinBBox = null;
+            // ★ 防御的リセット：前回スキャン中の状態が残る場合に備える
+            isProcessing = false;
+            lastDetectTime = 0;
+            // ★ カラープロファイルキャッシュをクリア（色設定が変わった場合に備える）
+            cachedColorProfileKey = '';
+            cachedColorProfiles = null;
+
+            isScanning = true;
+
+            if (scanMode === 'digital_sign') {
+                // ★ Stage1から再開（QR1は暗号化されていないため、sysEncDecode無しで読む必要がある）
+                digitalSignStage3 = false;
+                scanStage = 1;
+                statusText.innerText = "電子署名モード: 第1QRを探索中...";
+            } else if (scanMode === 'color_enc') {
+                scanStage = 1;
+                statusText.innerText = "Scanning Color QR Twin...";
+            } else if (scanMode === 'normal') {
+                scanStage = 1;
+                statusText.innerText = "Scanning QR1... (Hybrid)";
+            } else {
+                scanStage = 1;
+                statusText.innerText = "Scanning encrypted QR1...";
+            }
+
+            requestAnimationFrame(scanLoop);
+        }
+
+        // === Color QR Twin Mode ===
+        document.getElementById('colorEncModeBtn').addEventListener('click', () => {
+            scanMode = 'color_enc';
+            document.getElementById('headerText').innerText = 'QR Twin Reader (Color Enc)';
+            document.getElementById('colorSettingsScreen').style.display = 'flex';
+        });
+
+        let colorEncDarkName = 'red';
+        let colorEncLightName = 'yellow';
+
+        function cancelColorSettings() {
+            document.getElementById('colorSettingsScreen').style.display = 'none';
+            goBack();
+        }
+
+        function resetColorScanResult() {
+            colorScanResult = { qr1: null, qr2: null, qr3: null, qr4: null, _loc: null, _crop: null };
+            colorScanBBox = null;
+            colorScanAttemptCount = 0;
+        }
+
+        function clampValue(value, min, max) {
+            return Math.min(max, Math.max(min, value));
+        }
+
+        function normalizeBBox(bbox, maxWidth, maxHeight) {
+            if (!bbox) return null;
+            const x1 = clampValue(bbox.x, 0, maxWidth);
+            const y1 = clampValue(bbox.y, 0, maxHeight);
+            const x2 = clampValue(bbox.x + bbox.width, 0, maxWidth);
+            const y2 = clampValue(bbox.y + bbox.height, 0, maxHeight);
+            if (x2 <= x1 || y2 <= y1) return null;
+            return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+        }
+
+        function mergeBBox(base, addition) {
+            if (!addition) return base || null;
+            if (!base) {
+                return { x: addition.x, y: addition.y, width: addition.width, height: addition.height };
+            }
+            const x1 = Math.min(base.x, addition.x);
+            const y1 = Math.min(base.y, addition.y);
+            const x2 = Math.max(base.x + base.width, addition.x + addition.width);
+            const y2 = Math.max(base.y + base.height, addition.y + addition.height);
+            return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+        }
+
+        function expandBBox(bbox, padding, maxWidth, maxHeight) {
+            if (!bbox) return null;
+            return normalizeBBox({
+                x: bbox.x - padding,
+                y: bbox.y - padding,
+                width: bbox.width + padding * 2,
+                height: bbox.height + padding * 2
+            }, maxWidth, maxHeight);
+        }
+
+        function getBBoxArea(bbox) {
+            return bbox ? bbox.width * bbox.height : 0;
+        }
+
+        function pickLargestBarcodeBBox(barcodes, videoWidth, videoHeight) {
+            if (!barcodes || barcodes.length === 0) return null;
+            let bestBBox = null;
+            for (const barcode of barcodes) {
+                if (!barcode || !barcode.boundingBox) continue;
+                const normalized = normalizeBBox(barcode.boundingBox, videoWidth, videoHeight);
+                if (!normalized) continue;
+                if (!bestBBox || getBBoxArea(normalized) > getBBoxArea(bestBBox)) {
+                    bestBBox = normalized;
+                }
+            }
+            return bestBBox;
+        }
+
+        async function refreshColorScanBBox(videoWidth, videoHeight) {
+            if (!barcodeDetector) return;
+            const shouldRunDetector = !colorScanBBox || (colorScanAttemptCount % COLOR_DETECT_REFRESH_EVERY === 0);
+            if (!shouldRunDetector) return;
+            try {
+                const barcodes = await barcodeDetector.detect(video);
+                const detectedBBox = pickLargestBarcodeBBox(barcodes, videoWidth, videoHeight);
+                if (detectedBBox) {
+                    colorScanBBox = detectedBBox;
+                }
+            } catch (err) {
+                // Ignore detector errors and fall back to jsQR-based localization.
+            }
+        }
+
+        function getColorFocusPadding(bbox) {
+            return bbox
+                ? Math.max(COLOR_BBOX_PADDING, Math.round(Math.max(bbox.width, bbox.height) * 0.45))
+                : COLOR_BBOX_PADDING;
+        }
+
+        // ★ focused plan の最大解像度キャップ（精度とのバランス）
+        const COLOR_FOCUSED_CAP_DIM = 720;
+        function buildColorFocusedPlan(videoWidth, videoHeight, maxDim = 0) {
+            if (!colorScanBBox) return null;
+            const focusedBBox = expandBBox(colorScanBBox, getColorFocusPadding(colorScanBBox), videoWidth, videoHeight);
+            if (!focusedBBox) return null;
+            const sw = Math.max(1, Math.ceil(focusedBBox.width));
+            const sh = Math.max(1, Math.ceil(focusedBBox.height));
+            // maxDim=0 の場合でも COLOR_FOCUSED_CAP_DIM で制限
+            const effectiveMax = maxDim > 0 ? maxDim : COLOR_FOCUSED_CAP_DIM;
+            const scale = Math.min(1, effectiveMax / Math.max(sw, sh));
+
+            return {
+                sx: Math.floor(focusedBBox.x),
+                sy: Math.floor(focusedBBox.y),
+                sw,
+                sh,
+                targetWidth: Math.max(1, Math.round(sw * scale)),
+                targetHeight: Math.max(1, Math.round(sh * scale))
+            };
+        }
+
+        function buildColorScanPlan(videoWidth, videoHeight) {
+            const refreshFullFrame = colorScanAttemptCount > 0 && (colorScanAttemptCount % COLOR_FOCUS_REFRESH_EVERY === 0);
+            const focusedPlan = !refreshFullFrame ? buildColorFocusedPlan(videoWidth, videoHeight, 0) : null;
+            const useFullFrameFallback = !focusedPlan && (colorScanAttemptCount % COLOR_FULL_SCAN_EVERY === 0);
+
+            if (focusedPlan) return focusedPlan;
+
+            const maxDim = useFullFrameFallback ? COLOR_FULL_MAX_DIM : COLOR_FAST_MAX_DIM;
+            const scale = Math.min(1, maxDim / Math.max(videoWidth, videoHeight));
+            return {
+                sx: 0,
+                sy: 0,
+                sw: videoWidth,
+                sh: videoHeight,
+                targetWidth: Math.max(1, Math.round(videoWidth * scale)),
+                targetHeight: Math.max(1, Math.round(videoHeight * scale))
+            };
+        }
+
+        function mapScanBBoxToVideo(localBBox, plan, videoWidth, videoHeight) {
+            if (!localBBox) return null;
+            const scaleX = plan.sw / plan.targetWidth;
+            const scaleY = plan.sh / plan.targetHeight;
+            return normalizeBBox({
+                x: plan.sx + localBBox.x * scaleX,
+                y: plan.sy + localBBox.y * scaleY,
+                width: localBBox.width * scaleX,
+                height: localBBox.height * scaleY
+            }, videoWidth, videoHeight);
+        }
+
+        function updateColorScanFocus(localBBox, plan, videoWidth, videoHeight) {
+            if (!localBBox) return;
+            const mappedBBox = mapScanBBoxToVideo(localBBox, plan, videoWidth, videoHeight);
+            if (!mappedBBox) return;
+            colorScanBBox = mappedBBox;
+            colorScanResult._crop = {
+                x: Math.floor(mappedBBox.x),
+                y: Math.floor(mappedBBox.y),
+                w: Math.ceil(mappedBBox.width),
+                h: Math.ceil(mappedBBox.height)
+            };
+        }
+
+        function runColorScanPlan(plan) {
+            zxingCanvas.width = plan.targetWidth;
+            zxingCanvas.height = plan.targetHeight;
+            zxingCtx.drawImage(video, plan.sx, plan.sy, plan.sw, plan.sh, 0, 0, plan.targetWidth, plan.targetHeight);
+
+            const frameData = zxingCtx.getImageData(0, 0, plan.targetWidth, plan.targetHeight);
+            const pixelCount = plan.targetWidth * plan.targetHeight;
+            let localBBox = null;
+
+            const needQ1 = !colorScanResult.qr1;
+            const needQ2 = !colorScanResult.qr2;
+            if (needQ1 || needQ2) {
+                const chIdx = getTwin1ChannelIndex(colorEncDarkName, colorEncLightName);
+                // ★ まず適応的二値化（jsQRのbinarizer）で試行 → 照明ムラに強い
+                const twin1Mono = buildChannelMonochromeRgba(frameData.data, pixelCount, chIdx);
+                const twin1Fast = decodeTargetedColorPair([
+                    { data: twin1Mono, inversionAttempts: 'dontInvert', singleLocate: true }
+                ], plan.targetWidth, plan.targetHeight, needQ1, needQ2);
+                if (twin1Fast && twin1Fast.results) {
+                    for (const qr of twin1Fast.results) {
+                        assignColorPairResult(colorScanResult, 'qr1', 'qr2', qr);
+                    }
+                }
+                if (twin1Fast && twin1Fast.bbox) {
+                    localBBox = mergeBBox(localBBox, twin1Fast.bbox);
+                }
+                // ★ 適応的で見つからなかった分は固定閾値二値化でフォールバック
+                const fallbackQ1 = !colorScanResult.qr1;
+                const fallbackQ2 = !colorScanResult.qr2;
+                if (fallbackQ1 || fallbackQ2) {
+                    const twin1Bin = buildChannelBinarizedRgba(frameData.data, pixelCount, chIdx, 128);
+                    const twin1Fb = decodeTargetedColorPair([
+                        { data: twin1Bin, inversionAttempts: 'dontInvert', preBinarized: true, singleLocate: true }
+                    ], plan.targetWidth, plan.targetHeight, fallbackQ1, fallbackQ2);
+                    if (twin1Fb && twin1Fb.results) {
+                        for (const qr of twin1Fb.results) {
+                            assignColorPairResult(colorScanResult, 'qr1', 'qr2', qr);
+                        }
+                    }
+                    if (twin1Fb && twin1Fb.bbox) {
+                        localBBox = mergeBBox(localBBox, twin1Fb.bbox);
+                    }
+                }
+            }
+
+            // ★ Twin2はprocessColorQRTwinで処理（Twin1フォールバックも含む）
+            const stillNeedTwin2 = !(colorScanResult.qr3 && colorScanResult.qr4);
+            if (stillNeedTwin2) {
+                const colorDecoded = processColorQRTwin(frameData, plan.targetWidth, plan.targetHeight, colorScanResult);
+                if (colorDecoded) {
+                    mergeColorScanResult(colorDecoded);
+                    if (colorDecoded.bbox) {
+                        localBBox = mergeBBox(localBBox, colorDecoded.bbox);
+                    }
+                }
+            }
+
+            return {
+                localBBox,
+                colorCount: countColorScanResult(colorScanResult)
+            };
+        }
+
+        function countColorScanResult(result) {
+            if (!result) return 0;
+            let count = 0;
+            if (result.qr1) count++;
+            if (result.qr2) count++;
+            if (result.qr3) count++;
+            if (result.qr4) count++;
+            return count;
+        }
+
+        function mergeColorScanResult(nextResult) {
+            if (!colorScanResult) resetColorScanResult();
+            if (!nextResult) return colorScanResult;
+            for (const key of ['qr1', 'qr2', 'qr3', 'qr4']) {
+                if (!colorScanResult[key] && nextResult[key]) {
+                    colorScanResult[key] = nextResult[key];
+                }
+            }
+            return colorScanResult;
+        }
+
+        function startColorEncScan() {
+            colorEncDarkName = document.getElementById('readerDarkColor').value;
+            colorEncLightName = document.getElementById('readerLightColor').value;
+            resetColorScanResult();
+            document.getElementById('colorSettingsScreen').style.display = 'none';
+            scanStage = 1;
+            statusText.innerText = "Scanning Color QR Twin...";
+            startCamera();
+        }
+
+        // RGB??SV???
+        function rgbToHsv(r, g, b) {
+            r /= 255; g /= 255; b /= 255;
+            const max = Math.max(r, g, b), min = Math.min(r, g, b);
+            const d = max - min;
+            let h = 0, s = max === 0 ? 0 : d / max, v = max;
+            if (d !== 0) {
+                if (max === r) h = ((g - b) / d + 6) % 6;
+                else if (max === g) h = (b - r) / d + 2;
+                else h = (r - g) / d + 4;
+                h *= 60;
+            }
+            return { h, s, v };
+        }
+
+        // Classify each pixel as 'black', 'dark', 'light', or 'white'.
+        // Twin2 treats dark as black and light as white when decoding.
+        // Saturation is used as an extra hint for chromatic colors.
+        function getColorProfile(name) {
+            switch (String(name || '')) {
+                case 'black': return { r: 0, g: 0, b: 0 };
+                case 'red': return { r: 255, g: 0, b: 0 };
+                case 'cyan': return { r: 0, g: 191, b: 255 };
+                case 'yellow': return { r: 255, g: 215, b: 0 };
+                case 'pink': return { r: 255, g: 182, b: 193 };
+                case 'white':
+                default:
+                    return { r: 255, g: 255, b: 255 };
+            }
+        }
+
+        function buildSelectedColorProfiles(darkName, lightName) {
+            return {
+                black: getColorProfile('black'),
+                dark: getColorProfile(darkName === 'black' ? 'black' : darkName),
+                light: getColorProfile(lightName === 'white' ? 'white' : lightName),
+                white: getColorProfile('white')
+            };
+        }
+
+        let cachedColorProfileKey = '';
+        let cachedColorProfiles = null;
+
+        function getSelectedColorProfiles(darkName, lightName) {
+            const cacheKey = String(darkName || '') + '|' + String(lightName || '');
+            if (!cachedColorProfiles || cachedColorProfileKey !== cacheKey) {
+                cachedColorProfileKey = cacheKey;
+                cachedColorProfiles = buildSelectedColorProfiles(darkName, lightName);
+            }
+            return cachedColorProfiles;
+        }
+
+        function distance3(r, g, b, profile) {
+            return Math.abs(r - profile.r) + Math.abs(g - profile.g) + Math.abs(b - profile.b);
+        }
+
+        function classifyColorLegacyFromHsv(h, s, v, darkName, lightName) {
+            if (v < 0.10) return 'black';
+            if (s > 0.18) {
+                const chResult = classifyChromatic(h, s, v, darkName, lightName);
+                if (chResult === 'dark' || chResult === 'light') return chResult;
+            }
+            if (v < 0.40) return 'black';
+            return 'white';
+        }
+
+        function classifyColorLegacy(r, g, b, darkName, lightName) {
+            const hsv = rgbToHsv(r, g, b);
+            return classifyColorLegacyFromHsv(hsv.h, hsv.s, hsv.v, darkName, lightName);
+        }
+
+        function classifyChromatic(h, s, v, darkName, lightName) {
+            const colorRanges = {
+                'red': [{ min: 0, max: 30 }, { min: 330, max: 360 }],
+                'cyan': [{ min: 170, max: 210 }],
+                'yellow': [{ min: 30, max: 75 }],
+                'pink': [{ min: 325, max: 360 }, { min: 0, max: 20 }]
+            };
+
+            function matchesColor(name) {
+                const ranges = colorRanges[name];
+                if (!ranges) return false;
+                for (const range of ranges) {
+                    if (h >= range.min && h <= range.max) return true;
+                }
+                return false;
+            }
+
+            if (darkName !== 'black' && matchesColor(darkName)) return 'dark';
+            if (lightName !== 'white' && matchesColor(lightName)) return 'light';
+            return null;
+        }
+
+        function classifyColorPreciseWithHsv(r, g, b, h, s, v, profiles, darkName, lightName) {
+            const maxRgb = Math.max(r, g, b);
+            const minRgb = Math.min(r, g, b);
+            const chroma = maxRgb - minRgb;
+            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+
+            if (luma <= 28 && chroma <= 36) return 'black';
+            if (luma >= 242 && chroma <= 28) return 'white';
+
+            const chromaticHint = classifyChromatic(h, s, v, darkName, lightName);
+            const darkScoreBase = distance3(r, g, b, profiles.dark) + Math.max(0, 52 - chroma) * 1.4 + Math.max(0, luma - 205) * 0.6;
+            const lightScoreBase = distance3(r, g, b, profiles.light) + Math.max(0, 40 - chroma) * 1.2 + Math.max(0, 80 - luma) * 0.8;
+
+            let blackScore = distance3(r, g, b, profiles.black) + Math.max(0, luma - 70) * 1.2 + chroma * 0.15;
+            let darkScore = chromaticHint === 'dark' ? darkScoreBase * 0.55 : darkScoreBase;
+            let lightScore = chromaticHint === 'light' ? lightScoreBase * 0.55 : lightScoreBase;
+            let whiteScore = distance3(r, g, b, profiles.white) + Math.max(0, 185 - luma) * 1.3 + chroma * 0.1;
+
+            if (!chromaticHint && chroma < 36) {
+                darkScore += 40;
+                lightScore += 25;
+            }
+
+            if (darkName === 'black') darkScore = blackScore + 2;
+            if (lightName === 'white') lightScore = whiteScore + 2;
+
+            let bestLabel = 'black';
+            let bestScore = blackScore;
+            if (darkScore < bestScore) {
+                bestScore = darkScore;
+                bestLabel = 'dark';
+            }
+            if (lightScore < bestScore) {
+                bestScore = lightScore;
+                bestLabel = 'light';
+            }
+            if (whiteScore < bestScore) {
+                bestLabel = 'white';
+            }
+            return bestLabel;
+        }
+
+        function classifyColorPrecise(r, g, b, darkName, lightName) {
+            const profiles = getSelectedColorProfiles(darkName, lightName);
+            const hsv = rgbToHsv(r, g, b);
+            return classifyColorPreciseWithHsv(r, g, b, hsv.h, hsv.s, hsv.v, profiles, darkName, lightName);
+        }
+
+        function applyChannelDominanceHint(score, dominance, weight) {
+            if (dominance > 0) return score - dominance * weight;
+            return score + Math.abs(dominance) * 0.12;
+        }
+
+        function classifyColorFast(r, g, b, profiles, darkName, lightName) {
+            const maxRgb = Math.max(r, g, b);
+            const minRgb = Math.min(r, g, b);
+            const chroma = maxRgb - minRgb;
+            const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+
+            if (luma <= 26 && chroma <= 46) return { strict: 'black', twin2: 'black' };
+            if (luma >= 238 && chroma <= 38) return { strict: 'white', twin2: 'white' };
+
+            const blackScore = distance3(r, g, b, profiles.black) + luma * 1.0 + chroma * 0.18;
+            let darkScore = distance3(r, g, b, profiles.dark) + Math.max(0, 40 - chroma) * 1.25 + Math.max(0, luma - 225) * 0.35;
+            let lightScore = distance3(r, g, b, profiles.light) + Math.max(0, 34 - chroma) * 1.05 + Math.max(0, 92 - luma) * 0.45;
+            const whiteScore = distance3(r, g, b, profiles.white) + (255 - luma) * 1.0 + chroma * 0.12;
+
+            if (chroma < 30) {
+                darkScore += 28;
+                lightScore += 18;
+            }
+
+            if (darkName === 'red') {
+                darkScore = applyChannelDominanceHint(darkScore, r - Math.max(g, b), 1.25);
+            } else if (darkName === 'cyan') {
+                darkScore = applyChannelDominanceHint(darkScore, Math.min(g, b) - r, 1.1);
+            }
+
+            if (lightName === 'yellow') {
+                lightScore = applyChannelDominanceHint(lightScore, Math.min(r, g) - b, 0.95);
+            } else if (lightName === 'pink') {
+                lightScore = applyChannelDominanceHint(lightScore, r - Math.min(g, b), 0.8);
+            }
+
+            if (darkName === 'black') darkScore = blackScore + 2;
+            if (lightName === 'white') lightScore = whiteScore + 2;
+
+            let strict = 'black';
+            let bestScore = blackScore;
+            if (darkScore < bestScore) {
+                bestScore = darkScore;
+                strict = 'dark';
+            }
+            if (lightScore < bestScore) {
+                bestScore = lightScore;
+                strict = 'light';
+            }
+            if (whiteScore < bestScore) {
+                strict = 'white';
+            }
+
+            let twin2 = strict;
+            if (strict === 'black' && darkScore + 16 < blackScore) twin2 = 'dark';
+            else if (strict === 'white' && lightScore + 16 < whiteScore) twin2 = 'light';
+
+            return { strict, twin2 };
+        }
+
+        function getTwin1ChannelIndex(darkName, lightName) {
+            // 読取り.html準拠のチャネル選択ロジック:
+            // cyan(水色)暗色 → Rチャネル(0)で分離 (cyan R=0, white/yellow/pink R=高)
+            // red(赤)/black(黒)暗色 → Gチャネル(1)で分離 (red/black G=0, white/yellow/pink G=高)
+            if (lightName === 'white') return darkName === 'cyan' ? 0 : 1;
+            if (lightName === 'yellow') return darkName === 'cyan' ? 0 : 1;
+            return 1; // Gチャネル（デフォルト）
+        }
+
+        function setGrayPixel(buffer, idx, value) {
+            buffer[idx] = value;
+            buffer[idx + 1] = value;
+            buffer[idx + 2] = value;
+            buffer[idx + 3] = 255;
+        }
+
+        function buildChannelMonochromeRgba(src, pixelCount, channelIndex) {
+            const out = new Uint8ClampedArray(pixelCount * 4);
+            const len4 = pixelCount * 4;
+            for (let idx = 0; idx < len4; idx += 4) {
+                const value = src[idx + channelIndex];
+                out[idx] = value;
+                out[idx + 1] = value;
+                out[idx + 2] = value;
+                out[idx + 3] = 255;
+            }
+            return out;
+        }
+
+        // ★ 高速化: チャンネル抽出 → 即座に二値化（jsQRのbinarizerをスキップ可能）
+        function buildChannelBinarizedRgba(src, pixelCount, channelIndex, threshold) {
+            const out = new Uint8ClampedArray(pixelCount * 4);
+            const len4 = pixelCount * 4;
+            const thr = threshold || 128;
+            for (let idx = 0; idx < len4; idx += 4) {
+                const v = src[idx + channelIndex] < thr ? 0 : 255;
+                out[idx] = v;
+                out[idx + 1] = v;
+                out[idx + 2] = v;
+                out[idx + 3] = 255;
+            }
+            return out;
+        }
+
+        function getColorResultKey(qr) {
+            return qr ? ((qr.managementCode ?? 'none') + '::' + (qr.data ?? '')) : 'none';
+        }
+
+        function collectColorDecodeResults(scanPasses, width, height, expectedCount = 2, acceptQr = null) {
+            const found = new Map();
+            for (const scanPass of scanPasses) {
+                if (!scanPass || !scanPass.data) continue;
+                const res = jsQR(scanPass.data, width, height, {
+                    inversionAttempts: scanPass.inversionAttempts || 'attemptBoth',
+                    multi: scanPass.multi !== false
+                });
+                if (!res) continue;
+                const items = Array.isArray(res) ? res : [res];
+                for (const qr of items) {
+                    if (!qr || !qr.data) continue;
+                    if (acceptQr && !acceptQr(qr)) continue;
+                    const key = getColorResultKey(qr);
+                    if (!found.has(key)) {
+                        found.set(key, qr);
+                    }
+                }
+                if (found.size >= expectedCount) {
+                    return Array.from(found.values());
+                }
+            }
+            return Array.from(found.values());
+        }
+
+        function getColorPairTopBit(qr) {
+            return qr && qr.managementCode !== undefined ? ((qr.managementCode >>> 15) & 1) : null;
+        }
+
+        function cropMonochromeRgbaImage(src, width, height, sx, sy, cropWidth, cropHeight) {
+            const startX = Math.max(0, Math.min(width - 1, Math.round(sx)));
+            const startY = Math.max(0, Math.min(height - 1, Math.round(sy)));
+            const outWidth = Math.max(1, Math.min(width - startX, Math.round(cropWidth)));
+            const outHeight = Math.max(1, Math.min(height - startY, Math.round(cropHeight)));
+            const outLen = outWidth * outHeight * 4;
+            const out = new Uint8ClampedArray(outLen);
+            // ★ 高速化: fill(255)で一括初期化 → subarray copyで上書き
+            out.fill(255);
+
+            const rowBytes = outWidth * 4;
+            for (let y = 0; y < outHeight; y++) {
+                const srcStart = ((startY + y) * width + startX) * 4;
+                out.set(src.subarray(srcStart, srcStart + rowBytes), y * rowBytes);
+            }
+
+            return { data: out, width: outWidth, height: outHeight, offsetX: startX, offsetY: startY };
+        }
+
+        function offsetQrResult(qr, offsetX, offsetY) {
+            if (!qr || !qr.location) return qr;
+            const movePoint = (point) => point ? ({ x: point.x + offsetX, y: point.y + offsetY }) : point;
+            return {
+                ...qr,
+                location: {
+                    ...qr.location,
+                    topLeftCorner: movePoint(qr.location.topLeftCorner),
+                    topRightCorner: movePoint(qr.location.topRightCorner),
+                    bottomRightCorner: movePoint(qr.location.bottomRightCorner),
+                    bottomLeftCorner: movePoint(qr.location.bottomLeftCorner),
+                    topLeftFinderPattern: movePoint(qr.location.topLeftFinderPattern),
+                    topRightFinderPattern: movePoint(qr.location.topRightFinderPattern),
+                    bottomLeftFinderPattern: movePoint(qr.location.bottomLeftFinderPattern),
+                    bottomRightAlignmentPattern: movePoint(qr.location.bottomRightAlignmentPattern)
+                }
+            };
+        }
+
+        function estimateModuleSizeFromQr(qr) {
+            if (!qr || typeof qr.version !== 'number' || !qr.location) return null;
+            const modules = 17 + 4 * qr.version;
+            if (modules <= 0) return null;
+            const tl = qr.location.topLeftCorner;
+            const tr = qr.location.topRightCorner;
+            const bl = qr.location.bottomLeftCorner;
+            if (!tl || !tr || !bl) return null;
+            const top = Math.hypot(tr.x - tl.x, tr.y - tl.y);
+            const left = Math.hypot(bl.x - tl.x, bl.y - tl.y);
+            const avg = (top + left) / 2;
+            return avg > 0 ? (avg / modules) : null;
+        }
+
+        function decodeSingleColorQr(scanPass, width, height, acceptQr = null) {
+            if (!scanPass || !scanPass.data) return null;
+            const opts = {
+                inversionAttempts: scanPass.inversionAttempts || 'attemptBoth',
+                multi: false,
+                preBinarized: !!scanPass.preBinarized,
+                singleLocate: scanPass.singleLocate !== false
+            };
+            const res = jsQR(scanPass.data, width, height, opts);
+            if (!res || !res.data) return null;
+            if (!acceptQr || acceptQr(res)) return res;
+
+            // ★ フィルタ拒否時: multiモードで全QRを検出し、条件に合うものを探す
+            const multiRes = jsQR(scanPass.data, width, height, {
+                inversionAttempts: opts.inversionAttempts,
+                multi: true,
+                preBinarized: opts.preBinarized,
+                singleLocate: false  // より多くの候補を探索
+            });
+            if (!multiRes) return null;
+            const items = Array.isArray(multiRes) ? multiRes : [multiRes];
+            for (const qr of items) {
+                if (qr && qr.data && !qr.isRaw && acceptQr(qr)) return qr;
+            }
+            return null;
+        }
+
+        function decodeTargetedColorPair(scanPasses, width, height, needZero, needOne) {
+            const found = new Map();
+            let detectedBBox = null;
+            let seed = null;
+
+            // ★ Phase 1: multiモードで全QRを一括検出（最速パス）
+            for (const scanPass of scanPasses) {
+                if (!scanPass || !scanPass.data) continue;
+                const multiRes = jsQR(scanPass.data, width, height, {
+                    inversionAttempts: scanPass.inversionAttempts || 'dontInvert',
+                    multi: true,
+                    preBinarized: !!scanPass.preBinarized,
+                    singleLocate: false
+                });
+                if (multiRes) {
+                    const items = Array.isArray(multiRes) ? multiRes : [multiRes];
+                    for (const qr of items) {
+                        if (qr && qr.data && !qr.isRaw) {
+                            const key = getColorResultKey(qr);
+                            if (!found.has(key)) {
+                                found.set(key, qr);
+                                detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                                if (!seed) seed = qr;
+                            }
+                        }
+                    }
+                }
+                // multiで両方見つかったらここで終了
+                const hasZero = Array.from(found.values()).some(q => getColorPairTopBit(q) === 0);
+                const hasOne = Array.from(found.values()).some(q => getColorPairTopBit(q) === 1);
+                if ((!needZero || hasZero) && (!needOne || hasOne)) {
+                    return { results: Array.from(found.values()), bbox: detectedBBox };
+                }
+                if (seed) break;
+            }
+
+            // multiで1つも見つからなかった場合、singleモードで試行
+            if (!seed) {
+                for (const scanPass of scanPasses) {
+                    const qr = decodeSingleColorQr(scanPass, width, height);
+                    if (!qr) continue;
+                    const key = getColorResultKey(qr);
+                    if (!found.has(key)) {
+                        found.set(key, qr);
+                        detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                    }
+                    seed = qr;
+                    break;
+                }
+            }
+
+            if (!seed) {
+                return { results: Array.from(found.values()), bbox: detectedBBox };
+            }
+
+            const seedTopBit = getColorPairTopBit(seed);
+            let stillNeedZero = needZero && !Array.from(found.values()).some(q => getColorPairTopBit(q) === 0);
+            let stillNeedOne = needOne && !Array.from(found.values()).some(q => getColorPairTopBit(q) === 1);
+
+            if (!stillNeedZero && !stillNeedOne) {
+                return { results: Array.from(found.values()), bbox: detectedBBox };
+            }
+
+            // ★ Phase 2: クロップ方式で未発見のQRを探索
+            const moduleSize = estimateModuleSizeFromQr(seed);
+            if (!moduleSize) {
+                return { results: Array.from(found.values()), bbox: detectedBBox };
+            }
+
+            // ★ 複数のシフト値で試行（moduleSize推定誤差を吸収）
+            const shiftMultipliers = [8.5, 8.0, 9.0];
+            for (const mult of shiftMultipliers) {
+                if (!stillNeedZero && !stillNeedOne) break;
+
+                const shiftPx = Math.max(1, Math.round(moduleSize * mult));
+                if (shiftPx >= width || shiftPx >= height) continue;
+
+                const cropWidth = width - shiftPx;
+                const cropHeight = height - shiftPx;
+
+                if (stillNeedZero) {
+                    const scanPass = scanPasses[0];
+                    const crop = cropMonochromeRgbaImage(scanPass.data, width, height, 0, 0, cropWidth, cropHeight);
+                    const qr = decodeSingleColorQr({
+                        data: crop.data,
+                        inversionAttempts: scanPass.inversionAttempts,
+                        preBinarized: scanPass.preBinarized,
+                        singleLocate: scanPass.singleLocate
+                    }, crop.width, crop.height, (item) => getColorPairTopBit(item) !== 1);
+                    if (qr) {
+                        const adjusted = offsetQrResult(qr, crop.offsetX, crop.offsetY);
+                        const key = getColorResultKey(adjusted);
+                        if (!found.has(key)) {
+                            found.set(key, adjusted);
+                            detectedBBox = mergeLocationBBox(detectedBBox, adjusted);
+                            stillNeedZero = false;
+                        }
+                    }
+                }
+
+                if (stillNeedOne) {
+                    const scanPass = scanPasses[0];
+                    const crop = cropMonochromeRgbaImage(scanPass.data, width, height, shiftPx, shiftPx, cropWidth, cropHeight);
+                    const qr = decodeSingleColorQr({
+                        data: crop.data,
+                        inversionAttempts: scanPass.inversionAttempts,
+                        preBinarized: scanPass.preBinarized,
+                        singleLocate: scanPass.singleLocate
+                    }, crop.width, crop.height, (item) => getColorPairTopBit(item) !== 0);
+                    if (qr) {
+                        const adjusted = offsetQrResult(qr, crop.offsetX, crop.offsetY);
+                        const key = getColorResultKey(adjusted);
+                        if (!found.has(key)) {
+                            found.set(key, adjusted);
+                            detectedBBox = mergeLocationBBox(detectedBBox, adjusted);
+                            stillNeedOne = false;
+                        }
+                    }
+                }
+            }
+
+            return { results: Array.from(found.values()), bbox: detectedBBox };
+        }
+
+        function assignColorPairResult(target, zeroKey, oneKey, qr) {
+            if (!qr || !qr.data) return;
+            const topBit = getColorPairTopBit(qr);
+            // 第1QR(topBit===0)の場合、読取期限・読取者IDをチェック
+            if (topBit === 0 && zeroKey === 'qr1' && !target._expiryChecked) {
+                if (qr.expiryExt32 !== undefined && !checkExpiry(qr.expiryExt32)) {
+                    target._expiryFailed = true;
+                    return;
+                }
+                if (qr.readerIdExt32 !== undefined) {
+                    if (currentReaderIdHash === null || qr.readerIdExt32 !== currentReaderIdHash) {
+                        target._readerIdFailed = true;
+                        return;
+                    }
+                }
+                target._expiryChecked = true;
+            }
+            if (topBit === 0) {
+                if (!target[zeroKey]) target[zeroKey] = qr.data;
+                return;
+            }
+            if (topBit === 1) {
+                if (!target[oneKey]) target[oneKey] = qr.data;
+                return;
+            }
+            if (!target[zeroKey]) target[zeroKey] = qr.data;
+            else if (!target[oneKey] && target[zeroKey] !== qr.data) target[oneKey] = qr.data;
+        }
+
+        function mergeLocationBBox(targetBBox, qr) {
+            if (!qr || !qr.location) return targetBBox;
+            const points = [
+                qr.location.topLeftCorner,
+                qr.location.topRightCorner,
+                qr.location.bottomRightCorner,
+                qr.location.bottomLeftCorner
+            ].filter(Boolean);
+            if (points.length !== 4) return targetBBox;
+            const xs = points.map(point => point.x);
+            const ys = points.map(point => point.y);
+            return mergeBBox(targetBBox, {
+                x: Math.min(...xs),
+                y: Math.min(...ys),
+                width: Math.max(...xs) - Math.min(...xs),
+                height: Math.max(...ys) - Math.min(...ys)
+            });
+        }
+
+        function processColorQRTwin(imageData, width, height, existingResult = null) {
+            const needTwin1 = !(existingResult && existingResult.qr1 && existingResult.qr2);
+            const needTwin2 = !(existingResult && existingResult.qr3 && existingResult.qr4);
+            if (!needTwin1 && !needTwin2) return null;
+
+            const src = imageData.data;
+            const pixelCount = width * height;
+            const profiles = getSelectedColorProfiles(colorEncDarkName, colorEncLightName);
+
+            const pBlackR = profiles.black.r, pBlackG = profiles.black.g, pBlackB = profiles.black.b;
+            const pDarkR = profiles.dark.r, pDarkG = profiles.dark.g, pDarkB = profiles.dark.b;
+            const pLightR = profiles.light.r, pLightG = profiles.light.g, pLightB = profiles.light.b;
+            const pWhiteR = profiles.white.r, pWhiteG = profiles.white.g, pWhiteB = profiles.white.b;
+            const isDarkBlack = colorEncDarkName === 'black';
+            const isLightWhite = colorEncLightName === 'white';
+            const isDarkRed = colorEncDarkName === 'red';
+            const isDarkCyan = colorEncDarkName === 'cyan';
+            const isLightYellow = colorEncLightName === 'yellow';
+            const isLightPink = colorEncLightName === 'pink';
+
+            // ★ Twin1フォールバック用 + Twin2用のバッファ
+            const twin1StrictData = needTwin1 ? new Uint8ClampedArray(pixelCount * 4) : null;
+            const twin2StrictData = needTwin2 ? new Uint8ClampedArray(pixelCount * 4) : null;
+            const twin2BiasedData = needTwin2 ? new Uint8ClampedArray(pixelCount * 4) : null;
+
+            for (let i = 0; i < pixelCount; i++) {
+                const idx = i * 4;
+                const r = src[idx];
+                const g = src[idx + 1];
+                const b = src[idx + 2];
+
+                const maxRgb = r > g ? (r > b ? r : b) : (g > b ? g : b);
+                const minRgb = r < g ? (r < b ? r : b) : (g < b ? g : b);
+                const chroma = maxRgb - minRgb;
+                const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+
+                let strict, twin2Val;
+
+                if (luma <= 26 && chroma <= 46) {
+                    strict = 0;
+                    twin2Val = 0;
+                } else if (luma >= 238 && chroma <= 38) {
+                    strict = 3;
+                    twin2Val = 3;
+                } else {
+                    const blackScore = (r < pBlackR ? pBlackR - r : r - pBlackR) + (g < pBlackG ? pBlackG - g : g - pBlackG) + (b < pBlackB ? pBlackB - b : b - pBlackB) + luma + chroma * 0.18;
+                    let darkScore = (r < pDarkR ? pDarkR - r : r - pDarkR) + (g < pDarkG ? pDarkG - g : g - pDarkG) + (b < pDarkB ? pDarkB - b : b - pDarkB) + (40 - chroma > 0 ? (40 - chroma) * 1.25 : 0) + (luma - 225 > 0 ? (luma - 225) * 0.35 : 0);
+                    let lightScore = (r < pLightR ? pLightR - r : r - pLightR) + (g < pLightG ? pLightG - g : g - pLightG) + (b < pLightB ? pLightB - b : b - pLightB) + (34 - chroma > 0 ? (34 - chroma) * 1.05 : 0) + (92 - luma > 0 ? (92 - luma) * 0.45 : 0);
+                    const whiteScore = (r < pWhiteR ? pWhiteR - r : r - pWhiteR) + (g < pWhiteG ? pWhiteG - g : g - pWhiteG) + (b < pWhiteB ? pWhiteB - b : b - pWhiteB) + (255 - luma) + chroma * 0.12;
+
+                    if (chroma < 30) { darkScore += 28; lightScore += 18; }
+
+                    if (isDarkRed) {
+                        const dom = r - (g > b ? g : b);
+                        darkScore = dom > 0 ? darkScore - dom * 1.25 : darkScore + (-dom) * 0.12;
+                    } else if (isDarkCyan) {
+                        const dom = (g < b ? g : b) - r;
+                        darkScore = dom > 0 ? darkScore - dom * 1.1 : darkScore + (-dom) * 0.12;
+                    }
+                    if (isLightYellow) {
+                        const dom = (r < g ? r : g) - b;
+                        lightScore = dom > 0 ? lightScore - dom * 0.95 : lightScore + (-dom) * 0.12;
+                    } else if (isLightPink) {
+                        const dom = r - (g < b ? g : b);
+                        lightScore = dom > 0 ? lightScore - dom * 0.8 : lightScore + (-dom) * 0.12;
+                    }
+
+                    if (isDarkBlack) darkScore = blackScore + 2;
+                    if (isLightWhite) lightScore = whiteScore + 2;
+
+                    strict = 0;
+                    let bestScore = blackScore;
+                    if (darkScore < bestScore) { bestScore = darkScore; strict = 1; }
+                    if (lightScore < bestScore) { bestScore = lightScore; strict = 2; }
+                    if (whiteScore < bestScore) { strict = 3; }
+
+                    twin2Val = strict;
+                    if (strict === 0 && darkScore + 16 < blackScore) twin2Val = 1;
+                    else if (strict === 3 && lightScore + 16 < whiteScore) twin2Val = 2;
+                }
+
+                // Twin1: black(0) or dark(1) → 0, else 255
+                if (twin1StrictData) {
+                    const v1 = strict <= 1 ? 0 : 255;
+                    twin1StrictData[idx] = v1;
+                    twin1StrictData[idx + 1] = v1;
+                    twin1StrictData[idx + 2] = v1;
+                    twin1StrictData[idx + 3] = 255;
+                }
+                // Twin2: black(0) or light(2) → 0, else 255
+                if (twin2StrictData) {
+                    const vs = (strict === 0 || strict === 2) ? 0 : 255;
+                    twin2StrictData[idx] = vs;
+                    twin2StrictData[idx + 1] = vs;
+                    twin2StrictData[idx + 2] = vs;
+                    twin2StrictData[idx + 3] = 255;
+                    const vb = (twin2Val === 0 || twin2Val === 2) ? 0 : 255;
+                    twin2BiasedData[idx] = vb;
+                    twin2BiasedData[idx + 1] = vb;
+                    twin2BiasedData[idx + 2] = vb;
+                    twin2BiasedData[idx + 3] = 255;
+                }
+            }
+
+            const result = { qr1: null, qr2: null, qr3: null, qr4: null };
+            let detectedBBox = null;
+
+            // ★ Twin1 フォールバック（fast pathで見つからなかった場合のみ）
+            if (needTwin1) {
+                const needQr1 = !(existingResult && existingResult.qr1);
+                const needQr2 = !(existingResult && existingResult.qr2);
+                const twin1Targeted = decodeTargetedColorPair([
+                    { data: twin1StrictData, inversionAttempts: 'dontInvert', preBinarized: true, singleLocate: true }
+                ], width, height, needQr1, needQr2);
+                for (const qr of twin1Targeted.results) {
+                    assignColorPairResult(result, 'qr1', 'qr2', qr);
+                    detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                }
+            }
+
+            // Twin2 strict
+            if (needTwin2) {
+                const needQr3 = !(existingResult && existingResult.qr3);
+                const needQr4 = !(existingResult && existingResult.qr4);
+
+                const twin2Targeted = decodeTargetedColorPair([
+                    { data: twin2StrictData, inversionAttempts: 'dontInvert', preBinarized: true, singleLocate: true }
+                ], width, height, needQr3, needQr4);
+                for (const qr of twin2Targeted.results) {
+                    assignColorPairResult(result, 'qr3', 'qr4', qr);
+                    detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                }
+
+                // Twin2 biased フォールバック
+                const needBiasedQr3 = needQr3 && !result.qr3;
+                const needBiasedQr4 = needQr4 && !result.qr4;
+                if (needBiasedQr3 || needBiasedQr4) {
+                    const twin2BiasedTargeted = decodeTargetedColorPair([
+                        { data: twin2BiasedData, inversionAttempts: 'dontInvert', preBinarized: true, singleLocate: true }
+                    ], width, height, needBiasedQr3, needBiasedQr4);
+                    for (const qr of twin2BiasedTargeted.results) {
+                        assignColorPairResult(result, 'qr3', 'qr4', qr);
+                        detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                    }
+                }
+
+                // ★ Ver5精度向上: strict+biasedで見つからなかった場合、attemptBothで両データを再試行
+                const retryQr3 = needQr3 && !result.qr3;
+                const retryQr4 = needQr4 && !result.qr4;
+                if (retryQr3 || retryQr4) {
+                    const twin2Retry = decodeTargetedColorPair([
+                        { data: twin2StrictData, inversionAttempts: 'attemptBoth', preBinarized: true, singleLocate: true },
+                        { data: twin2BiasedData, inversionAttempts: 'attemptBoth', preBinarized: true, singleLocate: true }
+                    ], width, height, retryQr3, retryQr4);
+                    for (const qr of twin2Retry.results) {
+                        assignColorPairResult(result, 'qr3', 'qr4', qr);
+                        detectedBBox = mergeLocationBBox(detectedBBox, qr);
+                    }
+                }
+            }
+
+            if (detectedBBox) result.bbox = detectedBBox;
+            if (!result.qr1 && !result.qr2 && !result.qr3 && !result.qr4) {
+                return detectedBBox ? { bbox: detectedBBox } : null;
+            }
+            return result;
+        }
+
+        function showColorResult(data) {
+            document.getElementById('colorRes1').innerText = data.qr1 || '(not found)';
+            document.getElementById('colorRes2').innerText = data.qr2 || '(not found)';
+            document.getElementById('colorRes3').innerText = data.qr3 || '(not found)';
+            document.getElementById('colorRes4').innerText = data.qr4 || '(not found)';
+            if (navigator.vibrate) navigator.vibrate([100, 50, 100]);
+            document.getElementById('colorResultScreen').style.display = 'flex';
+        }
+
+        // --- Main Scan Loop ---
+        async function scanLoop() {
+            if (!isScanning) return;
+
+            if (video.videoWidth && overlayCanvas.width !== video.videoWidth) {
+                overlayCanvas.width = video.videoWidth;
+                overlayCanvas.height = video.videoHeight;
+            }
+
+            ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+            if (firstQR && firstQR.points) drawBoundingBox(firstQR.points, '#00E676');
+            if (secondQR && secondQR.points) drawBoundingBox(secondQR.points, '#29B6F6');
+
+            const now = Date.now();
+            if (!isProcessing && now - lastDetectTime > SCAN_INTERVAL_MS && video.readyState >= 2) {
+                isProcessing = true;
+                lastDetectTime = now;
+
+                try {
+                    // === Color QR Twin Mode (focused scan + fast RGB projection) ===
+                    if (scanMode === 'color_enc') {
+                        colorScanAttemptCount++;
+                        const vw = video.videoWidth;
+                        const vh = video.videoHeight;
+
+                        await refreshColorScanBBox(vw, vh);
+                        const plan = buildColorScanPlan(vw, vh);
+                        const primaryPass = runColorScanPlan(plan);
+                        updateColorScanFocus(primaryPass.localBBox, plan, vw, vh);
+
+                        let colorCount = primaryPass.colorCount;
+                        // ★ 高速化: 1つでも見つかったら即座にリファインへ（Ver4/5向け）
+                        if (colorCount < 4) {
+                            const refinePlan = buildColorFocusedPlan(vw, vh, COLOR_REFINE_MAX_DIM);
+                            const shouldRefine = refinePlan
+                                && (refinePlan.targetWidth > plan.targetWidth || refinePlan.targetHeight > plan.targetHeight)
+                                && (colorCount > 0 || (colorScanAttemptCount % COLOR_DETECT_REFRESH_EVERY === 0));
+
+                            if (shouldRefine) {
+                                const refinePass = runColorScanPlan(refinePlan);
+                                updateColorScanFocus(refinePass.localBBox, refinePlan, vw, vh);
+                                colorCount = refinePass.colorCount;
+                            }
+                        }
+
+                        if (colorCount > 0 && colorCount < 4) {
+                            statusText.innerText = 'Color QR Twin scanning... (' + colorCount + '/4)';
+                        }
+                        // カラーモードの読取期限・読取者IDチェック
+                        if (colorScanResult._expiryFailed) {
+                            isScanning = false; isProcessing = false;
+                            statusText.innerText = "読み取りの有効期間が終了しました";
+                            return;
+                        }
+                        if (colorScanResult._readerIdFailed) {
+                            isScanning = false; isProcessing = false;
+                            statusText.innerText = "読取者IDが一致しません";
+                            return;
+                        }
+                        if (colorCount === 4) {
+                            isScanning = false;
+                            isProcessing = false;
+                            showColorResult(colorScanResult);
+                            return;
+                        }
+                        isProcessing = false;
+                        if (isScanning) requestAnimationFrame(scanLoop);
+                        return;
+                    }
+
+                    let detectedItems = [];
+
+                    // === 通常モード: Stage 1 ===
+                    // 二重暗号化モードの Stage 1 ではシステム暗号化された第1QRを探す
+                    // → jsQR の sysEncDecode を使う
+                    const needSysEncForStage1 = (scanMode === 'double' && scanStage === 1);
+                    // 通常モードの Stage 3 でシステム暗号化された第2QRを探す場合
+                    const needSysEncForStage3 = (scanMode === 'normal' && scanStage === 3 && sysEncStage3);
+                    // 電子署名モードの Stage 3 でシステム暗号化された第2QRを探す場合
+                    const needSysEncForDigitalSign = (scanMode === 'digital_sign' && scanStage === 3 && digitalSignStage3);
+
+                    let useNativeDetector = barcodeDetector && (scanStage === 1 || (scanStage === 3 && !appMask && !needSysEncForStage3 && !needSysEncForDigitalSign));
+                    // システム暗号化復号が必要な場合はネイティブではなくjsQRを使う
+                    if (needSysEncForStage1 || needSysEncForDigitalSign) {
+                        useNativeDetector = false;
+                    }
+
+                    let cropBBox = null;
+
+                    // --- [フェーズ 1 / ネイティブ優先] Hybrid (BarcodeDetector Crop + jsQR) ---
+                    if (useNativeDetector) {
+                        try {
+                            const barcodes = await barcodeDetector.detect(video);
+                            if (barcodes && barcodes.length > 0) {
+                                for (let i = 0; i < barcodes.length; i++) {
+                                    const b = barcodes[i];
+
+                                    const bbox = b.boundingBox;
+                                    const PADDING = 50; 
+                                    const sx = Math.max(0, Math.floor(bbox.x) - PADDING);
+                                    const sy = Math.max(0, Math.floor(bbox.y) - PADDING);
+                                    const sw = Math.min(video.videoWidth - sx, Math.ceil(bbox.width) + PADDING * 2);
+                                    const sh = Math.min(video.videoHeight - sy, Math.ceil(bbox.height) + PADDING * 2);
+
+                                    zxingCanvas.width = sw;
+                                    zxingCanvas.height = sh;
+                                    zxingCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+                                    const imgData = zxingCtx.getImageData(0, 0, sw, sh);
+
+                                    const resList = jsQR(imgData.data, sw, sh, { inversionAttempts: "attemptBoth", multi: true });
+                                    if (resList && resList.length > 0) {
+                                        for (const res of resList) {
+                                            if (res && res.data && !res.isRaw) {
+                                                detectedItems.push({
+                                                    data: res.data,
+                                                    managementCode: res.managementCode,
+                                                    managementExt32: res.managementExt32,
+                                                    expiryExt32: res.expiryExt32,
+                                                    readerIdExt32: res.readerIdExt32,
+                                                    codewords: res.codewords,
+                                                    dataBytes: res.dataBytes,
+                                                    points: [
+                                                        { x: res.location.topLeftCorner.x + sx, y: res.location.topLeftCorner.y + sy },
+                                                        { x: res.location.topRightCorner.x + sx, y: res.location.topRightCorner.y + sy },
+                                                        { x: res.location.bottomRightCorner.x + sx, y: res.location.bottomRightCorner.y + sy },
+                                                        { x: res.location.bottomLeftCorner.x + sx, y: res.location.bottomLeftCorner.y + sy }
+                                                    ]
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch(err) { /* ignore Native Error */ }
+                    }
+
+                    // --- [フェーズ 2] BarcodeDetector位置検出 + jsQRクロップ復号 (appMask専用ハイブリッド) ---
+                    // appMask設定時: BarcodeDetectorでQRの位置だけ検出→クロップ→jsQRで暗号復号
+                    // BarcodeDetector自身は暗号化QRを復号できないが、位置検出は高速に行える
+                    if (detectedItems.length === 0 && barcodeDetector && scanStage === 3 && appMask) {
+                        try {
+                            const barcodes = await barcodeDetector.detect(video);
+                            if (barcodes && barcodes.length > 0) {
+                                for (let i = 0; i < barcodes.length; i++) {
+                                    const b = barcodes[i];
+                                    const bbox = b.boundingBox;
+                                    const PADDING = 50;
+                                    const sx = Math.max(0, Math.floor(bbox.x) - PADDING);
+                                    const sy = Math.max(0, Math.floor(bbox.y) - PADDING);
+                                    const sw = Math.min(video.videoWidth - sx, Math.ceil(bbox.width) + PADDING * 2);
+                                    const sh = Math.min(video.videoHeight - sy, Math.ceil(bbox.height) + PADDING * 2);
+
+                                    zxingCanvas.width = sw;
+                                    zxingCanvas.height = sh;
+                                    zxingCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+                                    const imgData = zxingCtx.getImageData(0, 0, sw, sh);
+
+                                    const cropResList = jsQR(imgData.data, sw, sh, {
+                                        inversionAttempts: "attemptBoth",
+                                        appEncMask: Array.from(appMask),
+                                        multi: true
+                                    });
+
+                                    if (cropResList && cropResList.length > 0) {
+                                        for (const cropRes of cropResList) {
+                                            if (cropRes && cropRes.data && !cropRes.isRaw) {
+                                                detectedItems.push({
+                                                    data: cropRes.data,
+                                                    managementCode: cropRes.managementCode,
+                                                    managementExt32: cropRes.managementExt32,
+                                                    expiryExt32: cropRes.expiryExt32,
+                                                    readerIdExt32: cropRes.readerIdExt32,
+                                                    codewords: cropRes.codewords,
+                                                    dataBytes: cropRes.dataBytes,
+                                                    points: [
+                                                        { x: cropRes.location.topLeftCorner.x + sx, y: cropRes.location.topLeftCorner.y + sy },
+                                                        { x: cropRes.location.topRightCorner.x + sx, y: cropRes.location.topRightCorner.y + sy },
+                                                        { x: cropRes.location.bottomRightCorner.x + sx, y: cropRes.location.bottomRightCorner.y + sy },
+                                                        { x: cropRes.location.bottomLeftCorner.x + sx, y: cropRes.location.bottomLeftCorner.y + sy }
+                                                    ]
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch(err) { /* ignore */ }
+                    }
+
+                    // --- [フェーズ 2.5] Stage 1位置再利用 + jsQRクロップ復号 (二重暗号化などBarcodeDetector失敗時用) ---
+                    // Stage 1で既にツインの座標を取得しているため、その周辺だけを探すことでフルスクリーンを回避する
+                    if (detectedItems.length === 0 && scanStage === 3 && (appMask || digitalSignStage3) && lastTwinBBox) {
+                        const bbox = lastTwinBBox;
+                        const PADDING = 80; // 多少のカメラ揺れを吸収するため広めに
+                        const sx = Math.max(0, Math.floor(bbox.x) - PADDING);
+                        const sy = Math.max(0, Math.floor(bbox.y) - PADDING);
+                        const sw = Math.min(video.videoWidth - sx, Math.ceil(bbox.width) + PADDING * 2);
+                        const sh = Math.min(video.videoHeight - sy, Math.ceil(bbox.height) + PADDING * 2);
+
+                        if (sw > 0 && sh > 0) {
+                            zxingCanvas.width = sw;
+                            zxingCanvas.height = sh;
+                            zxingCtx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+                            const imgData = zxingCtx.getImageData(0, 0, sw, sh);
+
+                            const cropOpts = {
+                                inversionAttempts: "attemptBoth",
+                                multi: true
+                            };
+                            if (appMask) {
+                                cropOpts.appEncMask = Array.from(appMask);
+                            } else if (digitalSignStage3) {
+                                cropOpts.sysEncDecode = true;
+                            }
+                            const cropResList = jsQR(imgData.data, sw, sh, cropOpts);
+
+                            if (cropResList && cropResList.length > 0) {
+                                for (const cropRes of cropResList) {
+                                    if (cropRes && cropRes.data && !cropRes.isRaw) {
+                                        detectedItems.push({
+                                            data: cropRes.data,
+                                            managementCode: cropRes.managementCode,
+                                            managementExt32: cropRes.managementExt32,
+                                            expiryExt32: cropRes.expiryExt32,
+                                            readerIdExt32: cropRes.readerIdExt32,
+                                            codewords: cropRes.codewords,
+                                            points: [
+                                                { x: cropRes.location.topLeftCorner.x + sx, y: cropRes.location.topLeftCorner.y + sy },
+                                                { x: cropRes.location.topRightCorner.x + sx, y: cropRes.location.topRightCorner.y + sy },
+                                                { x: cropRes.location.bottomRightCorner.x + sx, y: cropRes.location.bottomRightCorner.y + sy },
+                                                { x: cropRes.location.bottomLeftCorner.x + sx, y: cropRes.location.bottomLeftCorner.y + sy }
+                                            ]
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // --- [フェーズ 3 / Fallback] Custom jsQR Full-Screen Scan ---
+                    if (detectedItems.length === 0) {
+                        zxingCanvas.width = overlayCanvas.width;
+                        zxingCanvas.height = overlayCanvas.height;
+                        zxingCtx.drawImage(video, 0, 0, zxingCanvas.width, zxingCanvas.height);
+                        const fullData = zxingCtx.getImageData(0, 0, zxingCanvas.width, zxingCanvas.height);
+
+                        const opts = { inversionAttempts: "attemptBoth" };
+
+                        if (scanStage === 3) {
+                            if (appMask) {
+                                opts.appEncMask = Array.from(appMask);
+                            } else if (needSysEncForStage3 || needSysEncForDigitalSign) {
+                                // 通常モード/電子署名モード: 第2QRはシステム暗号化されている
+                                opts.sysEncDecode = true;
+                            } else {
+                                opts.multi = true;
+                            }
+                        }
+
+                        // 二重暗号化モードの Stage 1: システム暗号化された第1QRを探す
+                        if (needSysEncForStage1) {
+                            opts.sysEncDecode = true;
+                        }
+
+                        let resFullList = jsQR(fullData.data, fullData.width, fullData.height, opts);
+                        if (resFullList && !Array.isArray(resFullList)) resFullList = [resFullList];
+
+                        if (resFullList && resFullList.length > 0) {
+                            for (let resFull of resFullList) {
+                                if (resFull && resFull.data) {
+                                    if (scanStage === 1 && resFull.isRaw) continue;
+                                    
+                                    detectedItems.push({
+                                        data: resFull.data,
+                                        managementCode: resFull.managementCode,
+                                        managementExt32: resFull.managementExt32,
+                                        expiryExt32: resFull.expiryExt32,
+                                        readerIdExt32: resFull.readerIdExt32,
+                                        codewords: resFull.codewords,
+                                        dataBytes: resFull.dataBytes,
+                                        points: [
+                                            resFull.location.topLeftCorner,
+                                            resFull.location.topRightCorner,
+                                            resFull.location.bottomRightCorner,
+                                            resFull.location.bottomLeftCorner
+                                        ]
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // --- 結果処理ループ ---
+                    for (let item of detectedItems) {
+                        const { data: resultData, managementCode: resultMgmt, points: resultPts } = item;
+                        const mgmtStr = resultMgmt !== undefined ? resultMgmt.toString(2).padStart(16, '0') : "0000000000000000";
+                        const topBit = ((resultMgmt || 0) >> 15) & 1; // 0なら第1QR、1なら第2QR
+
+                        if (scanStage === 1) {
+                            // Stage 1でQRを発見した際、領域を保存
+                            if (resultPts && resultPts.length === 4) {
+                                const xs = resultPts.map(p => p.x);
+                                const ys = resultPts.map(p => p.y);
+                                lastTwinBBox = {
+                                    x: Math.min(...xs), y: Math.min(...ys),
+                                    width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys)
+                                };
+                            }
+
+                            // 1) 通常モードでは何もしない（誤判定防止）
+                            //   ただし、電子署名ビットが立っている場合は、通常データとして扱う
+                            //   以前のように自動遷移は行わない
+                            
+                            // 2) デジタル署名モードの初期処理はここではなく、Stage3で扱うが、
+                            //    もしStage1で何らかの理由でここに来た場合は、Stage3へ導く
+                            if (scanMode === 'digital_sign') {
+                                scanStage = 3;
+                                digitalSignStage3 = true;
+                                if (topBit === 0) {
+                                    firstQR = {
+                                        text: resultData,
+                                        managementCode: resultMgmt,
+                                        managementExt32: item.managementExt32,
+                                        expiryExt32: item.expiryExt32,
+                                        readerIdExt32: item.readerIdExt32,
+                                        points: resultPts,
+                                        codewords: item.codewords,
+                                        dataBytes: item.dataBytes
+                                    };
+                                    // 読取期限チェック
+                                    if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
+                                        isScanning = false; isProcessing = false;
+                                        statusText.innerText = "読み取りの有効期間が終了しました";
+                                        return;
+                                    }
+                                    // 読取者IDチェック
+                                    if (firstQR.readerIdExt32 !== undefined && currentReaderIdHash !== null && firstQR.readerIdExt32 !== currentReaderIdHash) {
+                                        isScanning = false; isProcessing = false;
+                                        statusText.innerText = "読取者IDが一致しません";
+                                        return;
+                                    }
+                                    if (firstQR.readerIdExt32 !== undefined && currentReaderIdHash === null) {
+                                        isScanning = false; isProcessing = false;
+                                        statusText.innerText = "読取者IDが一致しません";
+                                        return;
+                                    }
+                                    statusText.innerText = "第2QR（電子署名データ）を探索中...";
+                                } else {
+                                    secondQR = { text: resultData, managementCode: resultMgmt, points: resultPts };
+                                    statusText.innerText = "第1QR（元のデータ）を探索中...";
+                                }
+                                continue;
+                            }
+
+                            // 2) デジタル署名ではない通常のStage 1処理（第1QRのみ受け入れ）
+                            if (topBit !== 0) continue; 
+                            
+                            firstQR = {
+                                text: resultData,
+                                managementCode: resultMgmt,
+                                managementExt32: item.managementExt32,
+                                expiryExt32: item.expiryExt32,
+                                readerIdExt32: item.readerIdExt32,
+                                points: resultPts,
+                                codewords: item.codewords,
+                                dataBytes: item.dataBytes
+                            };
+
+                            // ★ 読取期限チェック（全モード共通）
+                            if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
+                                isScanning = false; isProcessing = false;
+                                statusText.innerText = "読み取りの有効期間が終了しました";
+                                return;
+                            }
+                            // ★ 読取者IDチェック（全モード共通）
+                            if (firstQR.readerIdExt32 !== undefined) {
+                                if (currentReaderIdHash === null || firstQR.readerIdExt32 !== currentReaderIdHash) {
+                                    isScanning = false; isProcessing = false;
+                                    statusText.innerText = "読取者IDが一致しません";
+                                    return;
+                                }
+                            }
+
+                            // 同一データフラグ
+                            if (mgmtStr[5] === '1') {
+                                secondQR = { text: resultData, managementCode: resultMgmt, points: resultPts };
+                                isScanning = false;
+                                isProcessing = false;
+                                showResultScreen();
+                                return;
+                            }
+
+                            if (scanMode === 'normal') {
+                                if (mgmtStr[6] === '1') {
+                                    isProcessing = false;
+                                    showSysEncScreen();
+                                    return;
+                                } else if (mgmtStr[7] === '1') {
+                                    isProcessing = false;
+                                    showPasswordScreen();
+                                    return;
+                                } else {
+                                    scanStage = 3;
+                                    statusText.innerText = "第2QRを探索中...";
+                                }
+                            } else {
+                                // 二重暗号化モード
+                                isProcessing = false;
+                                showDoubleEncScreen();
+                                return;
+                            }
+                        }
+                        else if (scanStage === 3) {
+                            // ★ 電子署名モードのペア探索中
+                            if (digitalSignStage3) {
+                                // もし missing QR が見つかったら
+                                if (topBit === 1 && !secondQR) {
+                                    secondQR = { text: resultData, managementCode: resultMgmt, points: resultPts };
+                                } else if (topBit === 0 && !firstQR) {
+                                    firstQR = {
+                                        text: resultData,
+                                        managementCode: resultMgmt,
+                                        managementExt32: item.managementExt32,
+                                        expiryExt32: item.expiryExt32,
+                                        readerIdExt32: item.readerIdExt32,
+                                        points: resultPts,
+                                        codewords: item.codewords,
+                                        dataBytes: item.dataBytes
+                                    };
+                                    // 読取期限チェック
+                                    if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
+                                        isScanning = false; isProcessing = false;
+                                        statusText.innerText = "読み取りの有効期間が終了しました";
+                                        return;
+                                    }
+                                    // 読取者IDチェック
+                                    if (firstQR.readerIdExt32 !== undefined) {
+                                        if (currentReaderIdHash === null || firstQR.readerIdExt32 !== currentReaderIdHash) {
+                                            isScanning = false; isProcessing = false;
+                                            statusText.innerText = "読取者IDが一致しません";
+                                            return;
+                                        }
+                                    }
+                                } else {
+                                    continue; // それ以外の重複読取は無視
+                                }
+
+                                // 必要な両方のQRが揃った → 電子署名の検証を実行
+                                if (firstQR && secondQR) {
+                                    isScanning = false;
+                                    isProcessing = false;
+                                    statusText.innerText = "電子署名を検証中...";
+
+                                    // (1) Base64からの復元
+                                    let signBytes;
+                                    try {
+                                        const binaryStr = atob(secondQR.text);
+                                        if (binaryStr.length !== 42) throw new Error("Invalid signature length");
+                                        signBytes = new Uint8Array(42);
+                                        for (let i = 0; i < 42; i++) signBytes[i] = binaryStr.charCodeAt(i);
+                                    } catch(e) {
+                                        showResultScreen({ verified: false, senderName: "不明", imageDataId: 0 });
+                                        return;
+                                    }
+
+                                    const keyId = (signBytes[0] << 8) | signBytes[1];
+                                    const sigR = signBytes.slice(2, 22);
+                                    const sigS = signBytes.slice(22, 42);
+
+                                    // 画像データIDを第1QRの拡張管理部32bitから取得
+                                    const imageDataId = firstQR.managementExt32 || 0;
+
+                                        // (2) 第1QRの全コード語（RS訂正済み再インタリーブ）でハッシュ計算と検証
+                                        try {
+                                            const pubKeyCacheHex = ECDSA_PUBLIC_KEYS[keyId];
+                                            let verified = false;
+                                            let senderName = "不明";
+
+                                            // 全コード語（データ+管理部+拡張管理部+埋め草+ECC、RS訂正済み）をハッシュ
+                                            const codewordsArray = firstQR.codewords;
+                                            const hashInput = new Uint8Array(codewordsArray);
+                                            const hashValue = sha256Bytes(hashInput);
+
+                                            const cwFirst8 = Array.from(codewordsArray).slice(0, 8).join(',');
+                                            const cwLast8 = Array.from(codewordsArray).slice(-8).join(',');
+                                            console.log(`[Verify] KeyID:${keyId}, Hash:${bytesToHex(hashValue)}, CW_len:${codewordsArray.length}, CW_first8:[${cwFirst8}], CW_last8:[${cwLast8}], ImageDataID:${imageDataId}`);
+
+                                        if (pubKeyCacheHex) {
+                                            senderName = ECDSA_SENDER_NAMES[keyId] || `ID:${keyId}`;
+                                            verified = ecdsaVerify(hashInput, sigR, sigS, pubKeyCacheHex);
+                                            console.log(`[Verify] Result: ${verified ? 'PASS ✓' : 'FAIL ✗'}, Sender: ${senderName}, PubKey: ${pubKeyCacheHex.substring(0,12)}...`);
+                                        } else {
+                                            console.warn(`[Verify] Unknown KeyID: ${keyId}, no public key found`);
+                                        }
+
+                                        showResultScreen({ verified: verified, senderName: senderName, imageDataId: imageDataId });
+                                    } catch (err) {
+                                        console.error("Verification failed", err);
+                                        showResultScreen({ verified: false, senderName: "エラー", imageDataId: 0 });
+                                    }
+                                    return;
+                                }
+                                continue;
+                            }
+
+                            // デジタル署名ではない通常のStage 3処理
+                            if (topBit !== 1) continue; 
+
+                            const diffTxt = resultData !== firstQR.text;
+                            const diffMgmt = firstQR.managementCode !== undefined && resultMgmt !== undefined && firstQR.managementCode !== resultMgmt;
+                            
+                            if (!diffTxt && !diffMgmt) continue;
+
+                            secondQR = { text: resultData, managementCode: resultMgmt, points: resultPts };
+                            isScanning = false;
+                            isProcessing = false;
+                            showResultScreen();
+                            return;
+                        }
+                    }
+
+                } catch (e) {
+                    console.error("スキャンループエラー", e);
+                }
+                isProcessing = false;
+            }
+
+            if (isScanning) requestAnimationFrame(scanLoop);
+        }
+    </script>
+</body>
+</html>
+
+
