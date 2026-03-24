@@ -740,7 +740,8 @@
             requestAnimationFrame(scanLoop);
         }
 
-        function showResultScreen(digitalSignResult = null) {
+        // errorMessage: 読取期限切れ・読取者ID不一致時のエラーメッセージ
+        function showResultScreen(digitalSignResult = null, errorMessage = null) {
             if (navigator.vibrate) navigator.vibrate([40, 30, 40]);
 
             isScanning = false;
@@ -749,8 +750,21 @@
             const dsSection = document.getElementById('digitalSignResultSection');
             const resultTitle = document.getElementById('resultTitle');
 
-            if (digitalSignResult) {
+            if (errorMessage) {
+                // ★ エラーメッセージ表示（読取期限切れ・読取者ID不一致）
+                normalSection.style.display = '';
+                dsSection.style.display = 'none';
+                resultTitle.innerText = errorMessage;
+                resultTitle.style.color = '#F44336';
+                document.getElementById('resText1').innerText = '-';
+                document.getElementById('resText2').innerText = '-';
+                const label1El = document.getElementById('normalResultLabel1');
+                const label2El = document.getElementById('normalResultLabel2');
+                if (label1El) label1El.innerText = '第1QR';
+                if (label2El) label2El.innerText = '第2QR';
+            } else if (digitalSignResult) {
                 // 電子署名モード結果表示
+                resultTitle.style.color = '';
                 normalSection.style.display = 'none';
                 dsSection.style.display = '';
                 resultTitle.innerText = '電子署名 認証結果';
@@ -788,6 +802,7 @@
                 }
             } else {
                 // 通常モード / 二重暗号化モード結果表示
+                resultTitle.style.color = '';
                 normalSection.style.display = '';
                 dsSection.style.display = 'none';
 
@@ -1626,7 +1641,7 @@
                     return;
                 }
                 if (qr.readerIdExt32 !== undefined) {
-                    if (currentReaderIdHash === null || qr.readerIdExt32 !== currentReaderIdHash) {
+                    if (currentReaderIdHash === null || (qr.readerIdExt32 >>> 0) !== (currentReaderIdHash >>> 0)) {
                         target._readerIdFailed = true;
                         return;
                     }
@@ -1892,12 +1907,12 @@
                         // カラーモードの読取期限・読取者IDチェック
                         if (colorScanResult._expiryFailed) {
                             isScanning = false; isProcessing = false;
-                            statusText.innerText = "読み取りの有効期間が終了しました";
+                            showResultScreen(null, "読み取りの有効期間が終了しました");
                             return;
                         }
                         if (colorScanResult._readerIdFailed) {
                             isScanning = false; isProcessing = false;
-                            statusText.innerText = "読取者IDが一致しません";
+                            showResultScreen(null, "読取者IDが一致しません");
                             return;
                         }
                         if (colorCount === 4) {
@@ -2173,19 +2188,16 @@
                                     // 読取期限チェック
                                     if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
                                         isScanning = false; isProcessing = false;
-                                        statusText.innerText = "読み取りの有効期間が終了しました";
+                                        showResultScreen(null, "読み取りの有効期間が終了しました");
                                         return;
                                     }
                                     // 読取者IDチェック
-                                    if (firstQR.readerIdExt32 !== undefined && currentReaderIdHash !== null && firstQR.readerIdExt32 !== currentReaderIdHash) {
-                                        isScanning = false; isProcessing = false;
-                                        statusText.innerText = "読取者IDが一致しません";
-                                        return;
-                                    }
-                                    if (firstQR.readerIdExt32 !== undefined && currentReaderIdHash === null) {
-                                        isScanning = false; isProcessing = false;
-                                        statusText.innerText = "読取者IDが一致しません";
-                                        return;
+                                    if (firstQR.readerIdExt32 !== undefined) {
+                                        if (currentReaderIdHash === null || (firstQR.readerIdExt32 >>> 0) !== (currentReaderIdHash >>> 0)) {
+                                            isScanning = false; isProcessing = false;
+                                            showResultScreen(null, "読取者IDが一致しません");
+                                            return;
+                                        }
                                     }
                                     statusText.innerText = "第2QR（電子署名データ）を探索中...";
                                 } else {
@@ -2212,14 +2224,14 @@
                             // ★ 読取期限チェック（全モード共通）
                             if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
                                 isScanning = false; isProcessing = false;
-                                statusText.innerText = "読み取りの有効期間が終了しました";
+                                showResultScreen(null, "読み取りの有効期間が終了しました");
                                 return;
                             }
                             // ★ 読取者IDチェック（全モード共通）
                             if (firstQR.readerIdExt32 !== undefined) {
-                                if (currentReaderIdHash === null || firstQR.readerIdExt32 !== currentReaderIdHash) {
+                                if (currentReaderIdHash === null || (firstQR.readerIdExt32 >>> 0) !== (currentReaderIdHash >>> 0)) {
                                     isScanning = false; isProcessing = false;
-                                    statusText.innerText = "読取者IDが一致しません";
+                                    showResultScreen(null, "読取者IDが一致しません");
                                     return;
                                 }
                             }
@@ -2273,14 +2285,14 @@
                                     // 読取期限チェック
                                     if (firstQR.expiryExt32 !== undefined && !checkExpiry(firstQR.expiryExt32)) {
                                         isScanning = false; isProcessing = false;
-                                        statusText.innerText = "読み取りの有効期間が終了しました";
+                                        showResultScreen(null, "読み取りの有効期間が終了しました");
                                         return;
                                     }
                                     // 読取者IDチェック
                                     if (firstQR.readerIdExt32 !== undefined) {
-                                        if (currentReaderIdHash === null || firstQR.readerIdExt32 !== currentReaderIdHash) {
+                                        if (currentReaderIdHash === null || (firstQR.readerIdExt32 >>> 0) !== (currentReaderIdHash >>> 0)) {
                                             isScanning = false; isProcessing = false;
-                                            statusText.innerText = "読取者IDが一致しません";
+                                            showResultScreen(null, "読取者IDが一致しません");
                                             return;
                                         }
                                     }
